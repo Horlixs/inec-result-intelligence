@@ -163,7 +163,7 @@ export function ElectionProfile(_props: ElectionProfileProps) {
     const query = q.trim().toLowerCase();
     const matchesSearch = !query || row.name.toLowerCase().includes(query) || humanElectionType(row.election_type).toLowerCase().includes(query);
     return matchesYear && matchesCategory && matchesType && matchesGeo && matchesSearch;
-  }), [rows, year, category, type, stateId, geoElectionIds, q]);
+  }), [rows, year, category, type, stateId, geoReady, geoElectionIds, q]);
 
   useEffect(() => {
     if (!supabase || !year || !type || !stateId) {
@@ -233,17 +233,17 @@ export function ElectionProfile(_props: ElectionProfileProps) {
 
       <div className="mt-5 grid gap-3 md:grid-cols-3">
         <SelectBox label="1 · Year" value={year} placeholder="Select a year" options={years.map((value) => ({ value, label: value }))} onChange={(value) => { setYear(value); setCategory(""); setType(""); setStateId(""); setLgaId(""); setWardId(""); setPollingUnitId(""); setGeoElectionIds(null); setSelected(""); }} />
-        <SelectBox label="2 · Category" value={category} placeholder="Select a category" options={categoryOptions} onChange={(value) => { setCategory(value as Category | ""); setType(""); setStateId(""); setLgaId(""); setWardId(""); setPollingUnitId(""); setGeoElectionIds(null); setSelected(""); }} disabled={!year} />
-        <SelectBox label="3 · Type of election" value={type} placeholder="Select an election type" options={typeOptions} onChange={(value) => { setType(value); setStateId(""); setLgaId(""); setWardId(""); setPollingUnitId(""); setGeoElectionIds(null); setSelected(""); }} disabled={!category} />
+        <SelectBox label="2 · Category" value={category} placeholder="All categories" options={[{ value: "", label: "All categories" }, ...categoryOptions]} onChange={(value) => { setCategory(value as Category | ""); setType(""); setSelected(""); }} disabled={!year} />
+        <SelectBox label="3 · Type of election" value={type} placeholder="Select an election type" options={[{ value: "", label: category ? "Select an election type" : "All election types" }, ...typeOptions]} onChange={(value) => { setType(value); setSelected(""); }} disabled={!category} />
       </div>
 
       <div className="mt-5 border-t border-zinc-800/60 pt-5">
         <div className="mb-3 flex items-center justify-between">
-          <div><p className="text-[10px] font-semibold uppercase tracking-[0.18em] text-zinc-600">Geographic scope</p><p className="mt-1 text-xs text-zinc-600">{type ? "Optional. Narrow the selected election from state to polling unit." : "Choose a year, category and election type first."}</p></div>
+          <div><p className="text-[10px] font-semibold uppercase tracking-[0.18em] text-zinc-600">Geographic scope</p><p className="mt-1 text-xs text-zinc-600">{year ? "Optional. Start at any geographic level; leave a child set to All when you want the wider area." : "Choose a year first. Geography can then be narrowed independently."}</p></div>
           {geoLoading && <RefreshCw size={14} className="animate-spin text-zinc-600" />}
         </div>
         <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
-          <SelectBox label="4 · State" value={stateId} placeholder="All states" options={[{ value: "", label: "All states" }, ...states.map((item) => ({ value: item.id, label: item.name }))]} onChange={(value) => { setStateId(value); setLgaId(""); setWardId(""); setPollingUnitId(""); setSelected(""); setGeoElectionIds(null); }} disabled={!type} />
+          <SelectBox label="4 · State" value={stateId} placeholder="All states" options={[{ value: "", label: "All states" }, ...states.map((item) => ({ value: item.id, label: item.name }))]} onChange={(value) => { setStateId(value); setLgaId(""); setWardId(""); setPollingUnitId(""); setSelected(""); setGeoElectionIds(null); }} disabled={!year} />
           <SelectBox label="5 · Local Government Area" value={lgaId} placeholder="All local government areas" options={[{ value: "", label: "All local government areas" }, ...lgas.map((item) => ({ value: item.id, label: item.name }))]} onChange={(value) => { setLgaId(value); setWardId(""); setPollingUnitId(""); setGeoElectionIds(null); setGeoReady(false); setSelected(""); }} disabled={!stateId} />
           <SelectBox label="6 · Ward" value={wardId} placeholder="All wards" options={[{ value: "", label: "All wards" }, ...wards.map((item) => ({ value: item.id, label: item.name }))]} onChange={(value) => { setWardId(value); setPollingUnitId(""); setGeoElectionIds(null); setGeoReady(false); setSelected(""); }} disabled={!lgaId} />
           <SelectBox label="7 · Polling Unit" value={pollingUnitId} placeholder="All polling units" options={[{ value: "", label: "All polling units" }, ...pollingUnits.map((item) => ({ value: item.id, label: item.pu_code ? item.name + " · " + item.pu_code : item.name }))]} onChange={(value) => { setPollingUnitId(value); setSelected(""); }} disabled={!wardId} />
