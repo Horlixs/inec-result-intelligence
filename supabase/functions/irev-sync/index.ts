@@ -53,7 +53,53 @@ function isCrawlablePage(url: string): boolean {
   }
 }
 
-async function discoverFromIrevApi() {\n  const found = new Map<string, ReturnType<typeof discoverFromHtml>[number]>();\n  const attempts: Array<Record<string, unknown>> = [];\n  for (const base of API_BASES) {\n    for (let electionType = 1; electionType <= 10; electionType++) {\n      const url = base + "/elections?election_type=" + electionType;\n      try {\n        const response = await fetch(url, { headers: { "user-agent": UA, "accept": "application/json, text/plain, */*", "origin": ORIGIN, "referer": ORIGIN + "/", "x-api-key": PUBLIC_INEC_CLIENT_KEY, "x-api-rt": String(Date.now()) } });\n        const body = await response.text();\n        attempts.push({ base, election_type: electionType, status: response.status, content_type: response.headers.get("content-type"), length: body.length });\n        if (!response.ok || !body) continue;\n        let payload: unknown;\n        try { payload = JSON.parse(body); } catch { continue; }\n        const rows = Array.isArray(payload) ? payload : (payload && typeof payload === "object" && Array.isArray((payload as Record<string, unknown>).data) ? (payload as Record<string, unknown>).data : []);\n        for (const row of rows as Array<Record<string, unknown>>) {\n          const id = String(row._id ?? row.id ?? row.election_id ?? "").trim();\n          if (!id) continue;\n          const name = String(row.name ?? row.title ?? row.election_name ?? id).trim();\n          found.set("irev:" + id, { external_id: "irev:" + id, name, election_type: classifyElection(name), election_date: null, source_url: ORIGIN + "/elections/" + id, status: "discovered" });\n        }\n      } catch (error) { attempts.push({ base, election_type: electionType, error: error instanceof Error ? error.message : String(error) }); }\n    }\n  }\n  return { elections: [...found.values()], attempts };\n}\n\nasync function crawlElection(sourceUrl: string): Promise<string[]> {
+async function discoverFromIrevApi() {
+  const found = new Map<string, ReturnType<typeof discoverFromHtml>[number]>();
+  const attempts: Array<Record<string, unknown>> = [];
+
+  for (const base of API_BASES) {
+    for (let electionType = 1; electionType <= 10; electionType++) {
+      const url = base + "/elections?election_type=" + electionType;
+      try {
+        const controller = new AbortController();
+        const timeout = setTimeout(() => controller.abort(), 12000);
+        const response = await fetch(url, {
+          method: "GET", signal: controller.signal,
+          headers: {
+            "user-agent": UA, accept: "application/json, text/plain, */*",
+            origin: ORIGIN, referer: ORIGIN + "/",
+            "x-api-key": PUBLIC_INEC_CLIENT_KEY, "x-api-rt": String(Date.now()),
+          },
+        });
+        clearTimeout(timeout);
+        const body = await response.text();
+        attempts.push({ base, election_type: electionType, status: response.status,
+          content_type: response.headers.get("content-type"), length: body.length,
+          preview: body.slice(0, 160) });
+        if (!response.ok || !body) continue;
+        let payload: unknown;
+        try { payload = JSON.parse(body); } catch { continue; }
+        const rows = Array.isArray(payload) ? payload :
+          payload && typeof payload === "object" && Array.isArray((payload as Record<string, unknown>).data)
+            ? (payload as Record<string, unknown>).data : [];
+        for (const row of rows as Array<Record<string, unknown>>) {
+          const id = String(row._id ?? row.id ?? row.election_id ?? "").trim();
+          if (!id) continue;
+          const name = String(row.name ?? row.title ?? row.election_name ?? id).trim();
+          found.set("irev:" + id, { external_id: "irev:" + id, name,
+            election_type: classifyElection(name), election_date: null,
+            source_url: ORIGIN + "/elections/" + id, status: "discovered" });
+        }
+      } catch (error) {
+        attempts.push({ base, election_type: electionType,
+          error: error instanceof Error ? error.message : String(error) });
+      }
+    }
+  }
+  return { elections: [...found.values()], attempts };
+}
+
+async function crawlElection(sourceUrl: string): Promise<string[]> {
   const queue: Array<{ url: string; depth: number }> = [{ url: sourceUrl, depth: 0 }];
   const visited = new Set<string>();
   const resultPages = new Set<string>();
@@ -108,7 +154,9 @@ Deno.serve(async (request) => {
     if (!response.ok) throw new Error("IReV returned HTTP " + response.status);
 
     const homepageHtml = await response.text();
-    const discovered = new Map<string, ReturnType<typeof discoverFromHtml>[number]>();\n    const apiDiscovery = await discoverFromIrevApi();\n    for (const election of apiDiscovery.elections) discovered.set(election.external_id, election);
+    const discovered = new Map<string, ReturnType<typeof discoverFromHtml>[number]>();
+    const apiDiscovery = await discoverFromIrevApi();
+    for (const election of apiDiscovery.elections) discovered.set(election.external_id, election);
     const homepageDiagnostics = {
       http_status: response.status,
       content_type: response.headers.get("content-type"),
@@ -227,7 +275,8 @@ Deno.serve(async (request) => {
         result_sheets_discovered: resultSheetsDiscovered,
         elections: electionStats,
         homepage: homepageDiagnostics,
-        scanned_directory_pages: scannedDirectoryPages,\n        api_discovery_attempts: apiDiscovery.attempts,
+        scanned_directory_pages: scannedDirectoryPages,
+        api_discovery_attempts: apiDiscovery.attempts,
       },
     });
 
