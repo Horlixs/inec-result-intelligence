@@ -91,6 +91,7 @@ export function ElectionProfile(_props: ElectionProfileProps) {
   const [loading, setLoading] = useState(true);
   const [geoLoading, setGeoLoading] = useState(false);
   const [error, setError] = useState("");
+  const [geoElectionIds, setGeoElectionIds] = useState<string[] | null>(null);
 
   async function load(): Promise<void> {
     setLoading(true); setError("");
@@ -108,7 +109,7 @@ export function ElectionProfile(_props: ElectionProfileProps) {
   useEffect(() => { void load(); }, []);
 
   useEffect(() => {
-    if (!supabase || !stateId) { setLgas([]); return; }
+    if (!supabase || !stateId || !type) { setLgas([]); return; }
     setGeoLoading(true);
     void supabase.from("lgas").select("id,state_id,name").eq("state_id", stateId).order("name", { ascending: true }).then((response) => {
       setLgas((response.data ?? []) as Lga[]); setGeoLoading(false);
@@ -116,7 +117,7 @@ export function ElectionProfile(_props: ElectionProfileProps) {
   }, [stateId]);
 
   useEffect(() => {
-    if (!supabase || !lgaId) { setWards([]); return; }
+    if (!supabase || !lgaId || !type) { setWards([]); return; }
     setGeoLoading(true);
     void supabase.from("wards").select("id,lga_id,name").eq("lga_id", lgaId).order("name", { ascending: true }).then((response) => {
       setWards((response.data ?? []) as Ward[]); setGeoLoading(false);
@@ -124,7 +125,7 @@ export function ElectionProfile(_props: ElectionProfileProps) {
   }, [lgaId]);
 
   useEffect(() => {
-    if (!supabase || !wardId) { setPollingUnits([]); return; }
+    if (!supabase || !wardId || !type) { setPollingUnits([]); return; }
     setGeoLoading(true);
     void supabase.from("polling_units").select("id,ward_id,name,pu_code").eq("ward_id", wardId).order("name", { ascending: true }).then((response) => {
       setPollingUnits((response.data ?? []) as PollingUnit[]); setGeoLoading(false);
@@ -143,17 +144,51 @@ export function ElectionProfile(_props: ElectionProfileProps) {
     });
   }, [selected]);
 
+  const scopedRows = useMemo(() => rows.filter((row) => {
+    const matchesYear = !year || yearOf(row.election_date) === year;
+    const matchesCategory = !category || categoryOf(row.election_type) === category;
+    return matchesYear && matchesCategory;
+  }), [rows, year, category]);
   const years = useMemo(() => [...new Set(rows.map((row) => yearOf(row.election_date)).filter((value) => value !== "Year unavailable"))].sort((a, b) => Number(b) - Number(a)), [rows]);
-  const categoryOptions = useMemo(() => [...new Set(rows.map((row) => categoryOf(row.election_type)))].map((value) => ({ value, label: value })), [rows]);
-  const typeOptions = useMemo(() => [...new Set(rows.filter((row) => !category || categoryOf(row.election_type) === category).map((row) => row.election_type))].map((value) => ({ value, label: humanElectionType(value) })), [rows, category]);
+  const categoryOptions = useMemo(() => [...new Set(rows.filter((row) => !year || yearOf(row.election_date) === year).map((row) => categoryOf(row.election_type)))].map((value) => ({ value, label: value })), [rows, year]);
+  const typeOptions = useMemo(() => [...new Set(scopedRows.map((row) => row.election_type))].map((value) => ({ value, label: humanElectionType(value) })), [scopedRows]);
   const filtered = useMemo(() => rows.filter((row) => {
     const matchesYear = !year || yearOf(row.election_date) === year;
     const matchesCategory = !category || categoryOf(row.election_type) === category;
     const matchesType = !type || row.election_type === type;
+    const matchesGeo = !stateId || geoElectionIds === null || geoElectionIds.includes(row.id);
     const query = q.trim().toLowerCase();
     const matchesSearch = !query || row.name.toLowerCase().includes(query) || humanElectionType(row.election_type).toLowerCase().includes(query);
-    return matchesYear && matchesCategory && matchesType && matchesSearch;
-  }), [rows, year, category, type, q]);
+    return matchesYear && matchesCategory && matchesType && matchesGeo && matchesSearch;
+  }), [rows, year, category, type, stateId, geoElectionIds, q]);
+
+  useEffect(() => {
+    if (!supabase || !year || !category || !type || !stateId) {
+      setGeoElectionIds(null);
+      return;
+    }
+    const electionIds = rows.filter((row) => yearOf(row.election_date) === year && categoryOf(row.election_type) === category && row.election_type === type).map((row) => row.id);
+    if (!electionIds.length) { setGeoElectionIds([]); return; }
+    setGeoLoading(true);
+    setError("");
+    let query = supabase
+      .from("result_sheets")
+      .select("election_id,polling_unit_id,polling_units!inner(ward_id,wards!inner(lga_id,lgas!inner(state_id)))")
+      .in("election_id", electionIds);
+    if (pollingUnitId) query = query.eq("polling_unit_id", pollingUnitId);
+    else if (wardId) query = query.eq("polling_units.wards.id", wardId);
+    else if (lgaId) query = query.eq("polling_units.wards.lgas.id", lgaId);
+    else query = query.eq("polling_units.wards.lgas.state_id", stateId);
+    void query.then((response) => {
+      if (response.error) {
+        setGeoElectionIds([]);
+        setError("The selected geography could not be matched to election evidence yet.");
+      } else {
+        setGeoElectionIds([...new Set((response.data ?? []).map((row) => row.election_id as string))]);
+      }
+      setGeoLoading(false);
+    });
+  }, [year, category, type, stateId, lgaId, wardId, pollingUnitId, rows]);
 
   const election = rows.find((row) => row.id === selected);
   const selectedState = states.find((item) => item.id === stateId);
@@ -162,9 +197,9 @@ export function ElectionProfile(_props: ElectionProfileProps) {
   const selectedPu = pollingUnits.find((item) => item.id === pollingUnitId);
 
   function resetFrom(level: "year" | "category" | "type" | "state" | "lga" | "ward"): void {
-    if (level === "year") { setYear(""); setCategory(""); setType(""); }
-    if (level === "category") { setCategory(""); setType(""); }
-    if (level === "type") setType("");
+    if (level === "year") { setYear(""); setCategory(""); setType(""); setStateId(""); setLgaId(""); setWardId(""); setPollingUnitId(""); setGeoElectionIds(null); }
+    if (level === "category") { setCategory(""); setType(""); setStateId(""); setLgaId(""); setWardId(""); setPollingUnitId(""); setGeoElectionIds(null); }
+    if (level === "type") { setType(""); setStateId(""); setLgaId(""); setWardId(""); setPollingUnitId(""); setGeoElectionIds(null); }
     if (level === "state") { setStateId(""); setLgaId(""); setWardId(""); setPollingUnitId(""); }
     if (level === "lga") { setLgaId(""); setWardId(""); setPollingUnitId(""); }
     if (level === "ward") { setWardId(""); setPollingUnitId(""); }
@@ -181,8 +216,8 @@ export function ElectionProfile(_props: ElectionProfileProps) {
       <div className="flex flex-col gap-4 xl:flex-row xl:items-end xl:justify-between">
         <div>
           <p className="text-[10px] font-semibold uppercase tracking-[0.18em] text-zinc-600">Election explorer</p>
-          <h2 className="mt-1 font-display text-lg font-semibold tracking-tight text-zinc-100">Drill down from election to polling unit</h2>
-          <p className="mt-1 text-xs leading-5 text-zinc-600">Year and election scope come first. Geography then narrows from state to local government, ward and polling unit.</p>
+          <h2 className="mt-1 font-display text-lg font-semibold tracking-tight text-zinc-100">Explore elections by year, office and place</h2>
+          <p className="mt-1 text-xs leading-5 text-zinc-600">Start with a year, then choose the election category and type. From there, narrow the results from state to local government area, ward and polling unit.</p>
         </div>
         <div className="flex w-full gap-2 xl:w-auto">
           <label className="flex min-w-0 flex-1 items-center gap-2 rounded-xl border border-zinc-800/60 bg-zinc-950/55 px-3 py-2.5 text-zinc-500 focus-within:border-zinc-700 xl:w-64">
@@ -193,21 +228,21 @@ export function ElectionProfile(_props: ElectionProfileProps) {
       </div>
 
       <div className="mt-5 grid gap-3 md:grid-cols-3">
-        <SelectBox label="1 · Year" value={year} placeholder="All years" options={years.map((value) => ({ value, label: value }))} onChange={(value) => { setYear(value); setCategory(""); setType(""); setSelected(""); }} />
-        <SelectBox label="2 · Category" value={category} placeholder="All categories" options={categoryOptions} onChange={(value) => { setCategory(value as Category | ""); setType(""); setSelected(""); }} disabled={!year} />
-        <SelectBox label="3 · Type of election" value={type} placeholder="All types" options={typeOptions} onChange={(value) => { setType(value); setSelected(""); }} disabled={!category} />
+        <SelectBox label="1 · Year" value={year} placeholder="Select a year" options={years.map((value) => ({ value, label: value }))} onChange={(value) => { setYear(value); setCategory(""); setType(""); setStateId(""); setLgaId(""); setWardId(""); setPollingUnitId(""); setGeoElectionIds(null); setSelected(""); }} />
+        <SelectBox label="2 · Category" value={category} placeholder="Select a category" options={categoryOptions} onChange={(value) => { setCategory(value as Category | ""); setType(""); setStateId(""); setLgaId(""); setWardId(""); setPollingUnitId(""); setGeoElectionIds(null); setSelected(""); }} disabled={!year} />
+        <SelectBox label="3 · Type of election" value={type} placeholder="Select an election type" options={typeOptions} onChange={(value) => { setType(value); setStateId(""); setLgaId(""); setWardId(""); setPollingUnitId(""); setGeoElectionIds(null); setSelected(""); }} disabled={!category} />
       </div>
 
       <div className="mt-5 border-t border-zinc-800/60 pt-5">
         <div className="mb-3 flex items-center justify-between">
-          <div><p className="text-[10px] font-semibold uppercase tracking-[0.18em] text-zinc-600">Geographic scope</p><p className="mt-1 text-xs text-zinc-600">Optional. Select only as deep as you need.</p></div>
+          <div><p className="text-[10px] font-semibold uppercase tracking-[0.18em] text-zinc-600">Geographic scope</p><p className="mt-1 text-xs text-zinc-600">{type ? "Optional. Narrow the selected election from state to polling unit." : "Choose a year, category and election type first."}</p></div>
           {geoLoading && <RefreshCw size={14} className="animate-spin text-zinc-600" />}
         </div>
         <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
-          <SelectBox label="4 · State" value={stateId} placeholder="All states" options={states.map((item) => ({ value: item.id, label: item.name }))} onChange={(value) => { setStateId(value); setLgaId(""); setWardId(""); setPollingUnitId(""); setSelected(""); }} />
-          <SelectBox label="5 · Local government" value={lgaId} placeholder="All LGAs" options={lgas.map((item) => ({ value: item.id, label: item.name }))} onChange={(value) => { setLgaId(value); setWardId(""); setPollingUnitId(""); setSelected(""); }} disabled={!stateId} />
-          <SelectBox label="6 · Ward" value={wardId} placeholder="All wards" options={wards.map((item) => ({ value: item.id, label: item.name }))} onChange={(value) => { setWardId(value); setPollingUnitId(""); setSelected(""); }} disabled={!lgaId} />
-          <SelectBox label="7 · Polling unit" value={pollingUnitId} placeholder="All polling units" options={pollingUnits.map((item) => ({ value: item.id, label: item.pu_code ? `${item.name} · ${item.pu_code}` : item.name }))} onChange={(value) => { setPollingUnitId(value); setSelected(""); }} disabled={!wardId} />
+          <SelectBox label="4 · State" value={stateId} placeholder="Select a state" options={states.map((item) => ({ value: item.id, label: item.name }))} onChange={(value) => { setStateId(value); setLgaId(""); setWardId(""); setPollingUnitId(""); setSelected(""); setGeoElectionIds(null); }} disabled={!type} />
+          <SelectBox label="5 · Local Government Area" value={lgaId} placeholder="Select a local government area" options={lgas.map((item) => ({ value: item.id, label: item.name }))} onChange={(value) => { setLgaId(value); setWardId(""); setPollingUnitId(""); setSelected(""); }} disabled={!stateId} />
+          <SelectBox label="6 · Ward" value={wardId} placeholder="Select a ward" options={wards.map((item) => ({ value: item.id, label: item.name }))} onChange={(value) => { setWardId(value); setPollingUnitId(""); setSelected(""); }} disabled={!lgaId} />
+          <SelectBox label="7 · Polling Unit" value={pollingUnitId} placeholder="Select a polling unit" options={pollingUnits.map((item) => ({ value: item.id, label: item.pu_code ? `${item.name} · ${item.pu_code}` : item.name }))} onChange={(value) => { setPollingUnitId(value); setSelected(""); }} disabled={!wardId} />
         </div>
         {(selectedState || selectedLga || selectedWard || selectedPu) && <div className="mt-4 flex flex-wrap items-center gap-1.5 text-[11px]">
           <button onClick={() => resetFrom("state")} className="text-zinc-500 hover:text-zinc-200">Nigeria</button>
@@ -221,7 +256,7 @@ export function ElectionProfile(_props: ElectionProfileProps) {
       <div className="mt-5 border-t border-zinc-800/60 pt-5">
         <div className="flex items-center justify-between gap-4">
           <div><p className="text-[10px] font-semibold uppercase tracking-[0.18em] text-zinc-600">Available elections</p><p className="mt-1 text-xs text-zinc-600">{filtered.length} matching record{filtered.length === 1 ? "" : "s"}</p></div>
-          {(year || category || type || stateId || lgaId || wardId || pollingUnitId) && <button onClick={() => { setYear(""); setCategory(""); setType(""); setStateId(""); setLgaId(""); setWardId(""); setPollingUnitId(""); setSelected(""); }} className="text-xs font-medium text-zinc-500 hover:text-zinc-200">Clear all</button>}
+          {(year || category || type || stateId || lgaId || wardId || pollingUnitId) && <button onClick={() => { setYear(""); setCategory(""); setType(""); setStateId(""); setLgaId(""); setWardId(""); setPollingUnitId(""); setGeoElectionIds(null); setSelected(""); }} className="text-xs font-medium text-zinc-500 hover:text-zinc-200">Clear all</button>}
         </div>
         <div className="mt-3 grid gap-2 sm:grid-cols-2 xl:grid-cols-3">
           {loading ? [1,2,3].map((item) => <div key={item} className="h-14 animate-pulse rounded-xl bg-zinc-800/40" />) : filtered.length ? filtered.map((row) => {
@@ -270,7 +305,7 @@ export function ElectionProfile(_props: ElectionProfileProps) {
         {tab === "results" && <div className="mt-5 rounded-2xl border border-zinc-800/60 bg-zinc-900/40 p-6"><p className="text-[10px] font-semibold uppercase tracking-[0.18em] text-zinc-600">Result evidence</p><div className="mt-3 flex items-end justify-between gap-4"><div><h3 className="font-display text-xl font-semibold">IReV result-sheet coverage</h3><p className="mt-1 text-xs text-zinc-600">Remote evidence discovered by the collector.</p></div><p className="font-display text-4xl font-semibold">{pct(stats?.result_sheets_expected, stats?.result_sheets_uploaded)}%</p></div><div className="mt-6 h-2 overflow-hidden rounded-full bg-zinc-800"><div className="h-full rounded-full bg-zinc-200 transition-all duration-500" style={{ width: `${pct(stats?.result_sheets_expected, stats?.result_sheets_uploaded)}%` }} /></div><p className="mt-3 text-xs text-zinc-600">{num(stats?.result_sheets_uploaded)} of {num(stats?.result_sheets_expected)} sheets recorded.</p></div>}
 
         {(tab === "sources" || tab === "candidates" || tab === "timeline") && (tab === "sources" ? sources.length ? <div className="mt-5 overflow-hidden rounded-2xl border border-zinc-800/60 bg-zinc-900/40">{sources.map((source) => <a key={source.id} href={source.url} target="_blank" rel="noreferrer" className="flex items-center justify-between gap-4 border-b border-zinc-800/60 p-4 transition-all duration-200 hover:bg-zinc-800/30 last:border-0"><div><p className="text-sm font-medium text-zinc-200">{source.title}</p><p className="mt-1 text-xs text-zinc-600">{source.source_type} · {fmt(source.published_at)}</p></div><ExternalLink size={15} className="shrink-0 text-zinc-600" /></a>)}</div> : <div className="mt-5"><EmptyState label="source" /></div> : <div className="mt-5"><EmptyState label={tab} /></div>)}
-      </> : <div className="rounded-2xl border border-zinc-800/60 bg-zinc-900/30 p-12 text-center"><FileImage className="mx-auto text-zinc-700" size={32} /><h3 className="mt-4 font-display text-lg font-semibold">No election selected</h3><p className="mt-2 text-sm text-zinc-600">Choose a year, category and type above, then open an election record.</p></div>}
+      </> : <div className="rounded-2xl border border-zinc-800/60 bg-zinc-900/30 p-12 text-center"><FileImage className="mx-auto text-zinc-700" size={32} /><h3 className="mt-4 font-display text-lg font-semibold">No election selected</h3><p className="mt-2 text-sm text-zinc-600">Choose a year, category and election type above, then narrow by geography if needed.</p></div>}
     </div>
   </section>;
 }
