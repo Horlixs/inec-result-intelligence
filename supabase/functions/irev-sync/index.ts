@@ -1,5 +1,5 @@
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
-import { discoverFromHtml } from "./parser.ts";
+import { discoverFromHtml, extractSameOriginLinks } from "./parser.ts";
 
 const supabase = createClient(
   Deno.env.get("SUPABASE_URL")!,
@@ -105,7 +105,49 @@ Deno.serve(async (request) => {
     const response = await fetch(ORIGIN + "/", { headers: { "user-agent": UA } });
     if (!response.ok) throw new Error("IReV returned HTTP " + response.status);
 
-    const elections = discoverFromHtml(await response.text());
+    const homepageHtml = await response.text();
+    const discovered = new Map<string, ReturnType<typeof discoverFromHtml>[number]>();
+    for (const election of discoverFromHtml(homepageHtml)) discovered.set(election.external_id, election);
+
+    // The current IReV homepage is application-driven and may expose the
+    // election directory through category/navigation pages instead of direct
+    // anchor tags in the initial HTML. Follow a small bounded set of same-origin
+    // HTML links so discovery does not depend on the homepage rendering mode.
+    const queue = extractSameOriginLinks(homepageHtml);
+    const visited = new Set<string>([ORIGIN + "/"]);
+    let scannedDirectoryPages = 0;
+    while (queue.length && scannedDirectoryPages < 50) {
+      const pageUrl = queue.shift()!;
+      if (visited.has(pageUrl)) continue;
+      visited.add(pageUrl);
+
+      let pageResponse: Response;
+      try {
+        pageResponse = await fetch(pageUrl, { headers: { "user-agent": UA } });
+      } catch {
+        continue;
+      }
+      if (!pageResponse.ok) continue;
+      const contentType = (pageResponse.headers.get("content-type") || "").toLowerCase();
+      if (!contentType.includes("text/html")) continue;
+
+      scannedDirectoryPages++;
+      const pageHtml = await pageResponse.text();
+      for (const election of discoverFromHtml(pageHtml)) discovered.set(election.external_id, election);
+
+      for (const link of extractSameOriginLinks(pageHtml)) {
+        try {
+          const parsed = new URL(link);
+          if (!visited.has(link) && !parsed.pathname.toLowerCase().startsWith("/elections/")) {
+            queue.push(link);
+          }
+        } catch {
+          // ignore malformed links
+        }
+      }
+    }
+
+    const elections = [...discovered.values()];
 
     if (elections.length) {
       const { error } = await supabase
