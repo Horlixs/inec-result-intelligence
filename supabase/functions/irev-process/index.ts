@@ -92,6 +92,23 @@ Deno.serve(async request => {
 
     const mime = normaliseMime(source.headers.get("content-type"));
     const hash = await sha256(bytes);
+
+    if (sheet.source_hash === hash && sheet.status === "verified") {
+      await supabase.from("result_sheets").update({
+        evidence_status: "remote_only",
+        processed_at: new Date().toISOString(),
+        last_error: null,
+      }).eq("id", id);
+
+      return new Response(JSON.stringify({
+        ok: true,
+        result_sheet_id: id,
+        status: "unchanged",
+        evidence_retained: false,
+        source_hash: hash,
+      }), { headers: { "content-type": "application/json" } });
+    }
+
     await supabase.from("result_sheets").update({
       source_hash: hash,
       storage_path: null,
