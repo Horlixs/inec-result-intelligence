@@ -15,10 +15,11 @@ export function PipelineRunner(_props: PipelineRunnerProps) {
     setRunning(true); setMessage("Discovering elections and result sheets…"); setError(false);
     try {
       if (!supabase) throw new Error("Supabase is not configured.");
-      const response = await supabase.functions.invoke<SyncResponse>("irev-sync", { body: { mode: "discover" } });
+      const client = supabase;
+      const response = await client.functions.invoke<SyncResponse>("irev-sync", { body: { mode: "discover" } });
       if (response.error) throw response.error;
       if (!response.data?.ok) throw new Error(response.data?.error ?? "The collector did not complete.");
-      const sheetResponse = await supabase.from("result_sheets").select("id").order("discovered_at", { ascending: true });
+      const sheetResponse = await client.from("result_sheets").select("id").order("discovered_at", { ascending: true });
       if (sheetResponse.error) throw sheetResponse.error;
       const ids = ((sheetResponse.data ?? []) as SheetRow[]).map((row) => row.id);
       if (!ids.length) { setMessage(`Discovery complete — ${response.data.discovered ?? 0} elections found. No result-sheet source links are available yet.`); return; }
@@ -27,7 +28,7 @@ export function PipelineRunner(_props: PipelineRunnerProps) {
       for (let index = 0; index < ids.length; index += concurrency) {
         const batch = ids.slice(index, index + concurrency);
         const results = await Promise.all(batch.map(async (id: string): Promise<boolean> => {
-          const result = await supabase.functions.invoke<{ ok?: boolean }>("irev-process", { body: { result_sheet_id: id } });
+          const result = await client.functions.invoke<{ ok?: boolean }>("irev-process", { body: { result_sheet_id: id } });
           return !result.error && result.data?.ok === true;
         }));
         completed += results.filter(Boolean).length; failed += results.filter((value: boolean) => !value).length;
