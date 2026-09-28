@@ -63,6 +63,12 @@ const KNOWN_ELECTION_TYPE_IDS = [
   "5f129a04df41d910dcdc1d56",
 ];
 
+// IReV's /elections endpoint becomes very slow when asked for an entire
+// election type. The public SPA scopes that request by state_id. INEC's
+// state_id sequence is stable: Abia=1 ... FCT=15 ... Zamfara=37.
+const KNOWN_STATE_IDS = Array.from({ length: 37 }, (_, index) => index + 1);
+const ELECTION_DISCOVERY_CONCURRENCY = 8;
+
 async function discoverElectionTypeIds(base: string, attempts: Array<Record<string, unknown>>): Promise<string[]> {
   const url = base + "/election-types";
   try {
@@ -109,65 +115,148 @@ async function discoverFromIrevApi() {
   const found = new Map<string, ReturnType<typeof discoverFromHtml>[number]>();
   const attempts: Array<Record<string, unknown>> = [];
 
-  // Discover the actual Mongo-style election-type IDs used by IReV.
-  // Integer values such as 1..10 are not accepted by the API.
+  const recordRows = (rows: unknown) => {
+    if (!Array.isArray(rows)) return;
+    for (const row of rows as Array<Record<string, unknown>>) {
+      const id = String(row._id ?? row.id ?? row.election_id ?? "").trim();
+      if (!id) continue;
+
+      const name = String(
+        row.full_name ?? row.name ?? row.title ?? row.election_name ?? id,
+      ).trim();
+
+      const electionDate =
+        String(row.election_date ?? row.date ?? "").trim() || null;
+
+      const stateId =
+        row.state_id === undefined || row.state_id === null
+          ? null
+          : String(row.state_id);
+
+      // Keep the IReV election id as the primary identity. State-scoped
+      // requests can return the same election more than once.
+      found.set("irev:" + id, {
+        external_id: "irev:" + id,
+        name,
+        election_type: classifyElection(name),
+        election_date: electionDate,
+        source_url: ORIGIN + "/elections/" + id,
+        status: "discovered",
+      });
+
+      // Some API records have an unhelpful name but do expose election_type_id.
+      // Preserve a useful classifier without changing the stored identity.
+      if (stateId && !name.toLowerCase().includes("state")) {
+        // Intentionally no state-specific mutation: the election record itself
+        // remains the source of truth.
+      }
+    }
+  };
+
+  const requestElectionList = async (
+    base: string,
+    electionTypeId: string,
+    stateId: number | null,
+  ): Promise<boolean> => {
+    const params = new URLSearchParams({
+      election_type: electionTypeId,
+    });
+    if (stateId !== null) params.set("state_id", String(stateId));
+
+    const url = base + "/elections?" + params.toString();
+
+    try {
+      const controller = new AbortController();
+      const timeout = setTimeout(() => controller.abort(), stateId === null ? 7000 : 5000);
+      const response = await fetch(url, {
+        method: "GET",
+        signal: controller.signal,
+        headers: {
+          "user-agent": UA,
+          accept: "application/json, text/plain, */*",
+          origin: ORIGIN,
+          referer: ORIGIN + "/",
+          "x-api-key": PUBLIC_INEC_CLIENT_KEY,
+          "x-api-rt": String(Date.now()),
+        },
+      });
+      clearTimeout(timeout);
+
+      const body = await response.text();
+      attempts.push({
+        base,
+        endpoint: "elections",
+        election_type: electionTypeId,
+        state_id: stateId,
+        status: response.status,
+        content_type: response.headers.get("content-type"),
+        length: body.length,
+        preview: body.slice(0, 160),
+      });
+
+      if (!response.ok || !body) return false;
+
+      let payload: unknown;
+      try {
+        payload = JSON.parse(body);
+      } catch {
+        return false;
+      }
+
+      const rows =
+        Array.isArray(payload)
+          ? payload
+          : payload &&
+              typeof payload === "object" &&
+              Array.isArray((payload as Record<string, unknown>).data)
+            ? (payload as Record<string, unknown>).data
+            : [];
+
+      recordRows(rows);
+      return rows.length > 0;
+    } catch (error) {
+      attempts.push({
+        base,
+        endpoint: "elections",
+        election_type: electionTypeId,
+        state_id: stateId,
+        error: error instanceof Error ? error.message : String(error),
+      });
+      return false;
+    }
+  };
+
+  // First try the compact request the API historically supported. If it
+  // times out, do not abandon discovery: fall back to the state-scoped form
+  // used by the official IReV SPA.
   for (const base of API_BASES) {
     const electionTypeIds = await discoverElectionTypeIds(base, attempts);
+
     for (const electionTypeId of electionTypeIds) {
-      const url = base + "/elections?election_type=" + encodeURIComponent(electionTypeId);
-      try {
-        const controller = new AbortController();
-        const timeout = setTimeout(() => controller.abort(), 12000);
-        const response = await fetch(url, {
-          method: "GET", signal: controller.signal,
-          headers: {
-            "user-agent": UA, accept: "application/json, text/plain, */*",
-            origin: ORIGIN, referer: ORIGIN + "/",
-            "x-api-key": PUBLIC_INEC_CLIENT_KEY, "x-api-rt": String(Date.now()),
-          },
-        });
-        clearTimeout(timeout);
-        const body = await response.text();
-        attempts.push({
-          base,
-          election_type: electionTypeId,
-          status: response.status,
-          content_type: response.headers.get("content-type"),
-          length: body.length,
-          preview: body.slice(0, 160),
-        });
-        if (!response.ok || !body) continue;
-        let payload: unknown;
-        try { payload = JSON.parse(body); } catch { continue; }
-        const rows = Array.isArray(payload) ? payload :
-          payload && typeof payload === "object" && Array.isArray((payload as Record<string, unknown>).data)
-            ? (payload as Record<string, unknown>).data : [];
-        for (const row of rows as Array<Record<string, unknown>>) {
-          const id = String(row._id ?? row.id ?? row.election_id ?? "").trim();
-          if (!id) continue;
-          const name = String(row.name ?? row.title ?? row.election_name ?? id).trim();
-          const electionDate = String(row.election_date ?? row.date ?? "").trim() || null;
-          found.set("irev:" + id, {
-            external_id: "irev:" + id,
-            name,
-            election_type: classifyElection(name),
-            election_date: electionDate,
-            source_url: ORIGIN + "/elections/" + id,
-            status: "discovered",
-          });
+      const broadSucceeded = await requestElectionList(base, electionTypeId, null);
+
+      if (!broadSucceeded) {
+        // The state-scoped form avoids the 504s caused by the unscoped query.
+        // Run a bounded number of requests concurrently so a slow INEC backend
+        // does not serialize the entire discovery pass.
+        for (let offset = 0; offset < KNOWN_STATE_IDS.length; offset += ELECTION_DISCOVERY_CONCURRENCY) {
+          const batch = KNOWN_STATE_IDS.slice(
+            offset,
+            offset + ELECTION_DISCOVERY_CONCURRENCY,
+          );
+
+          await Promise.all(
+            batch.map((stateId) =>
+              requestElectionList(base, electionTypeId, stateId)
+            ),
+          );
         }
-      } catch (error) {
-        attempts.push({
-          base,
-          election_type: electionTypeId,
-          error: error instanceof Error ? error.message : String(error),
-        });
       }
     }
   }
+
   return { elections: [...found.values()], attempts };
 }
-
 async function crawlElection(sourceUrl: string): Promise<string[]> {
   const queue: Array<{ url: string; depth: number }> = [{ url: sourceUrl, depth: 0 }];
   const visited = new Set<string>();
