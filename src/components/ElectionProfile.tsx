@@ -1,4 +1,4 @@
-import { ArrowLeft, ArrowUpRight, CalendarDays, CheckCircle2, ChevronDown, ChevronRight, ExternalLink, FileImage, MapPin, RefreshCw, Search, ShieldCheck, Users, XCircle } from "lucide-react";
+import { ArrowUpRight, CalendarDays, CheckCircle2, ChevronDown, ChevronRight, ExternalLink, FileImage, MapPin, RefreshCw, Search, ShieldCheck, Users, XCircle } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { supabase } from "../lib/supabase";
 
