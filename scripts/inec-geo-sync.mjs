@@ -55,12 +55,8 @@ const stateRows = states.map((item) => ({
 }));
 await upsert("states", stateRows, "code");
 
-const stateIds = new Map();
-for (const state of stateRows) {
-  const [row] = await selectIds("states", "code", state.code);
-  if (!row) throw new Error("State not found after sync: " + state.name);
-  stateIds.set(state.code, row.id);
-}
+const stateRowsDb = await selectIds("states", "code", "not.null", "id,code");
+const stateIds = new Map(stateRowsDb.map((row) => [row.code, row.id]));
 
 const lgaRows = lgas.map((item) => {
   const stateCode = String(item.state_code ?? item.stateCode).padStart(2, "0");
@@ -73,13 +69,8 @@ const lgaRows = lgas.map((item) => {
 });
 await upsert("lgas", lgaRows, "state_id,code");
 
-const lgaIds = new Map();
-for (const lga of lgaRows) {
-  const rows = await selectIds("lgas", "state_id", lga.state_id, "id,code");
-  const match = rows.find((row) => row.code === lga.code);
-  if (!match) throw new Error("LGA not found after sync: " + lga.name);
-  lgaIds.set(lga.state_id + "/" + lga.code, match.id);
-}
+const lgaRowsDb = await selectIds("lgas", "code", "not.null", "id,state_id,code");
+const lgaIds = new Map(lgaRowsDb.map((row) => [row.state_id + "/" + row.code, row.id]));
 
 const wardRows = wards.map((item) => {
   const stateCode = String(item.state_code ?? item.stateCode).padStart(2, "0");
@@ -95,13 +86,8 @@ const wardRows = wards.map((item) => {
 });
 await upsert("wards", wardRows, "lga_id,code");
 
-const wardIds = new Map();
-for (const ward of wardRows) {
-  const rows = await selectIds("wards", "lga_id", ward.lga_id, "id,code");
-  const match = rows.find((row) => row.code === ward.code);
-  if (!match) throw new Error("Ward not found after sync: " + ward.name);
-  wardIds.set(ward.lga_id + "/" + ward.code, match.id);
-}
+const wardRowsDb = await selectIds("wards", "code", "not.null", "id,lga_id,code");
+const wardIds = new Map(wardRowsDb.map((row) => [row.lga_id + "/" + row.code, row.id]));
 
 const puRows = pollingUnits.map((item) => {
   const parts = String(item.full_code).split("/");
