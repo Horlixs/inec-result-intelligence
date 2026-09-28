@@ -10,7 +10,8 @@
     "lint": "eslint .",
     "irev:discover": "node scripts/irev-discover.mjs",
     "irev:inspect": "node scripts/irev-inspect.mjs",
-    "inec:discover": "node scripts/inec-source-discover.mjs"
+    "inec:discover": "node scripts/inec-source-discover.mjs",
+    "inec:sync": "node scripts/inec-sync.mjs"
   },
   "dependencies": {
     "@tanstack/react-router": "^1.132.0",
