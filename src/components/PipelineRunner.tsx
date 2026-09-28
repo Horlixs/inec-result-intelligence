@@ -22,7 +22,7 @@ export function PipelineRunner() {
       if (invokeError) throw invokeError;
       if (!data?.ok) throw new Error(data?.error || "The collector did not complete.");
 
-      const { data: sheets, error: sheetError } = await supabase
+      const { data: sheets, error: sheetError } = await client
         .from("result_sheets")
         .select("id")
         .order("discovered_at", { ascending: true });
