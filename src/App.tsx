@@ -25,7 +25,7 @@ export default function App(_props: AppProps) {
   return (
     <div className="min-h-screen bg-[#07090d] text-zinc-100">
       <div className="flex min-h-screen">
-        <aside className={`fixed inset-y-0 left-0 z-50 w-72 border-r border-zinc-800/60 bg-[#090b10]/95 p-4 backdrop-blur-xl transition-transform duration-200 lg:static lg:translate-x-0 ${mobileOpen ? "translate-x-0" : "-translate-x-full"}`}>
+        <aside className={`fixed inset-y-0 left-0 z-50 w-[17rem] border-r border-zinc-800/60 bg-[#090b10]/95 p-4 backdrop-blur-xl transition-transform duration-200 lg:static lg:translate-x-0 ${mobileOpen ? "translate-x-0" : "-translate-x-full"}`}>
           <div className="flex h-full flex-col">
             <div className="flex items-center justify-between px-2 py-2">
               <div className="flex items-center gap-3">
@@ -57,7 +57,7 @@ export default function App(_props: AppProps) {
         {mobileOpen && <button aria-label="Close navigation overlay" onClick={() => setMobileOpen(false)} className="fixed inset-0 z-40 bg-black/60 backdrop-blur-sm lg:hidden" />}
         <div className="min-w-0 flex-1">
           <header className="sticky top-0 z-30 border-b border-zinc-800/60 bg-[#07090d]/80 backdrop-blur-xl">
-            <div className="flex h-16 items-center justify-between px-4 sm:px-6 lg:px-8">
+            <div className="flex h-14 items-center justify-between px-4 sm:px-6 lg:px-8">
               <div className="flex items-center gap-3">
                 <button aria-label="Open navigation" onClick={() => setMobileOpen(true)} className="rounded-xl border border-zinc-800/60 p-2 text-zinc-400 transition-all duration-200 hover:bg-zinc-900 hover:text-zinc-100 lg:hidden"><Menu size={18} /></button>
                 <div className="hidden items-center gap-2 rounded-xl border border-zinc-800/60 bg-zinc-900/40 px-3 py-2 text-xs text-zinc-500 sm:flex"><Search size={14} /> Search intelligence</div>
@@ -69,12 +69,12 @@ export default function App(_props: AppProps) {
             </div>
           </header>
           <main className="mx-auto max-w-[1500px] p-4 sm:p-6 lg:p-8">
-            <section className="mb-8 overflow-hidden rounded-2xl border border-zinc-800/60 bg-gradient-to-br from-zinc-900/80 via-zinc-900/40 to-zinc-950/70 p-6 shadow-2xl shadow-black/10 sm:p-8">
+            <section className="mb-6 overflow-hidden rounded-2xl border border-zinc-800/60 bg-gradient-to-br from-zinc-900/80 via-zinc-900/40 to-zinc-950/70 px-5 py-6 shadow-2xl shadow-black/10 sm:px-7 sm:py-7">
               <div className="flex flex-col justify-between gap-6 lg:flex-row lg:items-end">
                 <div className="max-w-3xl">
                   <div className="mb-4 inline-flex items-center gap-2 rounded-full border border-zinc-800/60 bg-zinc-950/70 px-3 py-1.5 text-[11px] font-medium text-zinc-400"><Activity size={13} /> Election intelligence workspace</div>
-                  <h1 className="font-display text-4xl font-semibold tracking-[-0.04em] text-zinc-50 sm:text-5xl">Know what the result data says.</h1>
-                  <p className="mt-4 max-w-2xl text-sm leading-6 text-zinc-500 sm:text-base">Trace official election metadata, result evidence and validation signals from source to insight.</p>
+                  <h1 className="font-display text-[2rem] font-semibold leading-[1.08] tracking-[-0.035em] text-zinc-50 sm:text-[2.35rem]">Know what the result data says.</h1>
+                  <p className="mt-4 max-w-2xl text-[13px] leading-6 text-zinc-500 sm:text-sm">Trace official election metadata, result evidence and validation signals from source to insight.</p>
                 </div>
                 <div className="flex items-center gap-3 rounded-2xl border border-zinc-800/60 bg-zinc-950/50 px-4 py-3">
                   <div className="grid size-9 place-items-center rounded-xl bg-zinc-800/80 text-zinc-300"><ShieldCheck size={17} /></div>
