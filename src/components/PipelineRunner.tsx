@@ -24,7 +24,6 @@ export function PipelineRunner() {
       const { data: sheets, error: sheetError } = await supabase
         .from("result_sheets")
         .select("id")
-        .eq("status", "discovered")
         .order("discovered_at", { ascending: true });
 
       if (sheetError) throw sheetError;
@@ -39,7 +38,7 @@ export function PipelineRunner() {
       let failed = 0;
       const concurrency = 3;
 
-      setMessage(`Processing ${ids.length} result sheets — download → hash → OCR → validate → cleanup…`);
+      setMessage(`Refreshing ${ids.length} result sheets — fetching remote URLs → hashing → extracting only changed evidence…`);
 
       for (let i = 0; i < ids.length; i += concurrency) {
         const batch = ids.slice(i, i + concurrency);
@@ -58,7 +57,7 @@ export function PipelineRunner() {
       }
 
       setMessage(
-        `Pipeline complete — ${data.discovered ?? 0} elections discovered, ${ids.length} result sheets processed, ${failed} failed. Successful ephemeral evidence files are removed after extraction; failed or review-required files are retained.`,
+        `Refresh complete — ${data.discovered ?? 0} elections discovered, ${ids.length} source URLs checked, ${failed} failed. Result documents are fetched transiently and never stored in Supabase Storage.`,
       );
       setError(failed > 0);
     } catch (e) {
