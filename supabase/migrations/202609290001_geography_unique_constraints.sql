@@ -19,20 +19,19 @@ alter table public.polling_units
 alter table public.polling_units
   add column if not exists ward_code text;
 
--- Ensure the geography codes used by the INEC sync are valid upsert conflict targets.
+-- Use full unique indexes because PostgREST upsert with onConflict
+-- requires an inferable unique/exclusion constraint. PostgreSQL unique
+-- indexes still permit multiple NULL values, so these remain safe for
+-- rows whose codes are not yet populated.
 
 create unique index if not exists idx_states_code_unique
-  on public.states(code)
-  where code is not null;
+  on public.states(code);
 
 create unique index if not exists idx_lgas_state_code_unique
-  on public.lgas(state_id, code)
-  where code is not null;
+  on public.lgas(state_id, code);
 
 create unique index if not exists idx_wards_lga_code_unique
-  on public.wards(lga_id, code)
-  where code is not null;
+  on public.wards(lga_id, code);
 
 create unique index if not exists idx_polling_units_ward_pu_code_unique
-  on public.polling_units(ward_id, pu_code)
-  where pu_code is not null;
+  on public.polling_units(ward_id, pu_code);
