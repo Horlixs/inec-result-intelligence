@@ -6,7 +6,7 @@
   "scripts": {
     "dev": "vite",
     "build": "tsc -b && vite build",
-    "preview": "vite",
+    "preview": "vite preview",
     "lint": "eslint .",
     "irev:discover": "node scripts/irev-discover.mjs",
     "irev:inspect": "node scripts/irev-inspect.mjs",
