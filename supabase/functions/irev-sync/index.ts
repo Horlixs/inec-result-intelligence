@@ -7,17 +7,29 @@ const supabase = createClient(
 );
 
 function extractResultLinks(html: string, origin: string): string[] {
-  const pattern = /<a\b[^>]*href=["']([^"']+)["'][^>]*>([\s\S]*?)<\/a>/gi;
   const links = new Set<string>();
-  for (const match of html.matchAll(pattern)) {
-    const href = match[1];
-    const text = match[2].replace(/<[^>]*>/g, " ").replace(/\s+/g, " ").trim().toLowerCase();
-    if (!/result|polling|sheet|view/.test(text + " " + href.toLowerCase())) continue;
+
+  const add = (value: string) => {
     try {
-      const url = new URL(href, origin);
-      if (url.origin === origin && url.pathname !== "/") links.add(url.toString());
+      const url = new URL(value, origin);
+      if (url.origin !== origin) return;
+      const path = url.pathname.toLowerCase();
+      if (/\\.(pdf|jpe?g|png|webp)$/i.test(path) || /result|sheet|document|upload/.test(path)) {
+        links.add(url.toString());
+      }
     } catch { /* ignore malformed links */ }
+  };
+
+  const anchorPattern = /<a\\b[^>]*href=["']([^"']+)["'][^>]*>([\\s\\S]*?)<\\/a>/gi;
+  for (const match of html.matchAll(anchorPattern)) {
+    const href = match[1];
+    const text = match[2].replace(/<[^>]*>/g, " ").replace(/\\s+/g, " ").trim().toLowerCase();
+    if (/result|polling|sheet|document|view/.test(text + " " + href.toLowerCase())) add(href);
   }
+
+  const mediaPattern = /<(?:img|iframe|embed|object)\\b[^>]*(?:src|data)=["']([^"']+)["'][^>]*>/gi;
+  for (const match of html.matchAll(mediaPattern)) add(match[1]);
+
   return [...links];
 }
 
