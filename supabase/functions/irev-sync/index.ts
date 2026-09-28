@@ -288,6 +288,7 @@ Deno.serve(async (request) => {
       diagnostics: {
         homepage: homepageDiagnostics,
         scanned_directory_pages: scannedDirectoryPages,
+        api_discovery_attempts: apiDiscovery.attempts,
       },
     }), {
       headers: { "content-type": "application/json" },
