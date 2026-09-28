@@ -150,8 +150,10 @@ export function ElectionProfile(_props: ElectionProfileProps) {
     return matchesYear && matchesCategory;
   }), [rows, year, category]);
   const years = useMemo(() => [...new Set(rows.map((row) => yearOf(row.election_date)).filter((value) => value !== "Year unavailable"))].sort((a, b) => Number(b) - Number(a)), [rows]);
-  const categoryOptions = useMemo(() => [...new Set(rows.filter((row) => !year || yearOf(row.election_date) === year).map((row) => categoryOf(row.election_type)))].map((value) => ({ value, label: value })), [rows, year]);
-  const typeOptions = useMemo(() => [...new Set(scopedRows.map((row) => row.election_type))].map((value) => ({ value, label: humanElectionType(value) })), [scopedRows]);
+  const categoryOrder: Category[] = ["Federal", "State", "Local Government"];
+  const categoryOptions = useMemo(() => [...new Set(rows.filter((row) => !year || yearOf(row.election_date) === year).map((row) => categoryOf(row.election_type)))].sort((a, b) => categoryOrder.indexOf(a) - categoryOrder.indexOf(b)).map((value) => ({ value, label: value })), [rows, year]);
+  const typeOrder = ["presidential", "senatorial", "house_of_representatives", "governorship", "house_of_assembly", "state_constituency", "chairmanship", "councillor"];
+  const typeOptions = useMemo(() => [...new Set(scopedRows.map((row) => row.election_type))].sort((a, b) => typeOrder.indexOf(a) - typeOrder.indexOf(b)).map((value) => ({ value, label: humanElectionType(value) })), [scopedRows]);
   const filtered = useMemo(() => rows.filter((row) => {
     const matchesYear = !year || yearOf(row.election_date) === year;
     const matchesCategory = !category || categoryOf(row.election_type) === category;
@@ -200,9 +202,9 @@ export function ElectionProfile(_props: ElectionProfileProps) {
     if (level === "year") { setYear(""); setCategory(""); setType(""); setStateId(""); setLgaId(""); setWardId(""); setPollingUnitId(""); setGeoElectionIds(null); }
     if (level === "category") { setCategory(""); setType(""); setStateId(""); setLgaId(""); setWardId(""); setPollingUnitId(""); setGeoElectionIds(null); }
     if (level === "type") { setType(""); setStateId(""); setLgaId(""); setWardId(""); setPollingUnitId(""); setGeoElectionIds(null); }
-    if (level === "state") { setStateId(""); setLgaId(""); setWardId(""); setPollingUnitId(""); }
-    if (level === "lga") { setLgaId(""); setWardId(""); setPollingUnitId(""); }
-    if (level === "ward") { setWardId(""); setPollingUnitId(""); }
+    if (level === "state") { setStateId(""); setLgaId(""); setWardId(""); setPollingUnitId(""); setGeoElectionIds(null); }
+    if (level === "lga") { setLgaId(""); setWardId(""); setPollingUnitId(""); setGeoElectionIds(null); }
+    if (level === "ward") { setWardId(""); setPollingUnitId(""); setGeoElectionIds(null); }
     setSelected("");
   }
 
