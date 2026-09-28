@@ -40,3 +40,20 @@ export function parseElectionLocation(name: string): string | null {
 export function normaliseElectionHref(href: string, origin: string): string {
   return new URL(href, origin).toString();
 }
+
+export function extractElectionLinks(html: string): Array<{ name: string; href: string }> {
+  const links: Array<{ name: string; href: string }> = [];
+  const seen = new Set<string>();
+  const pattern = /<a\b[^>]*href=["']([^"']+)["'][^>]*>([\s\S]*?)<\/a>/gi;
+
+  for (const match of html.matchAll(pattern)) {
+    const name = match[2].replace(/<[^>]*>/g, " ").replace(/\s+/g, " ").trim();
+    const href = match[1].trim();
+    if (!name || !href || !/election/i.test(name)) continue;
+    const key = href + "|" + name;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    links.push({ name, href });
+  }
+  return links;
+}
