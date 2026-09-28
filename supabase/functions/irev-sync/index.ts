@@ -8,123 +8,66 @@ const supabase = createClient(
 
 function extractResultLinks(html: string, origin: string): string[] {
   const links = new Set<string>();
-
   const add = (value: string) => {
     try {
       const url = new URL(value, origin);
       if (url.origin !== origin) return;
       const path = url.pathname.toLowerCase();
-      if (/\\.(pdf|jpe?g|png|webp)$/i.test(path) || /result|sheet|document|upload/.test(path)) {
-        links.add(url.toString());
-      }
+      if (/\.(pdf|jpe?g|png|webp)$/i.test(path) || /result|sheet|document|upload/.test(path)) links.add(url.toString());
     } catch { /* ignore malformed links */ }
   };
-
-  const anchorPattern = /<a\\b[^>]*href=["']([^"']+)["'][^>]*>([\\s\\S]*?)<\\/a>/gi;
-  for (const match of html.matchAll(anchorPattern)) {
-    const href = match[1];
-    const text = match[2].replace(/<[^>]*>/g, " ").replace(/\\s+/g, " ").trim().toLowerCase();
-    if (/result|polling|sheet|document|view/.test(text + " " + href.toLowerCase())) add(href);
+  const anchors = /<a\b[^>]*href=["']([^"']+)["'][^>]*>([\s\S]*?)<\/a>/gi;
+  for (const match of html.matchAll(anchors)) {
+    const value = match[1];
+    const text = match[2].replace(/<[^>]*>/g, " ").replace(/\s+/g, " ").trim().toLowerCase();
+    if (/result|polling|sheet|document|view/.test(text + " " + value.toLowerCase())) add(value);
   }
-
-  const mediaPattern = /<(?:img|iframe|embed|object)\\b[^>]*(?:src|data)=["']([^"']+)["'][^>]*>/gi;
-  for (const match of html.matchAll(mediaPattern)) add(match[1]);
-
+  const media = /<(?:img|iframe|embed|object)\b[^>]*(?:src|data)=["']([^"']+)["'][^>]*>/gi;
+  for (const match of html.matchAll(media)) add(match[1]);
   return [...links];
 }
 
 Deno.serve(async (request) => {
-  if (request.method !== "POST") {
-    return new Response(JSON.stringify({ error: "POST required" }), { status: 405, headers: { "content-type": "application/json" } });
-  }
-
+  if (request.method !== "POST") return new Response(JSON.stringify({ error: "POST required" }), { status: 405, headers: { "content-type": "application/json" } });
   const startedAt = new Date().toISOString();
-
   try {
-    const response = await fetch("https://inecelectionresults.ng/", {
-      headers: { "user-agent": "INEC-Result-Intelligence/1.0 source-collector" },
-    });
+    const response = await fetch("https://inecelectionresults.ng/", { headers: { "user-agent": "INEC-Result-Intelligence/1.0 source-collector" } });
     if (!response.ok) throw new Error("IReV returned HTTP " + response.status);
-
-    const html = await response.text();
-    const elections = discoverFromHtml(html);
-
+    const elections = discoverFromHtml(await response.text());
     if (elections.length) {
       const { error } = await supabase.from("elections").upsert(elections, { onConflict: "external_id" });
       if (error) throw error;
     }
-
     let resultSheetsDiscovered = 0;
-
     for (const election of elections) {
       try {
-        const page = await fetch(election.source_url, {
-          headers: { "user-agent": "INEC-Result-Intelligence/1.0 source-collector" },
-        });
+        const page = await fetch(election.source_url, { headers: { "user-agent": "INEC-Result-Intelligence/1.0 source-collector" } });
         if (!page.ok) continue;
-
-        const pageHtml = await page.text();
-        const resultLinks = extractResultLinks(pageHtml, "https://inecelectionresults.ng");
-
-        const { data: savedElection } = await supabase
-          .from("elections")
-          .select("id")
-          .eq("external_id", election.external_id)
-          .maybeSingle();
-
+        const resultLinks = extractResultLinks(await page.text(), "https://inecelectionresults.ng");
+        const { data: savedElection } = await supabase.from("elections").select("id").eq("external_id", election.external_id).maybeSingle();
         if (!savedElection?.id || !resultLinks.length) continue;
-
         const rows = resultLinks.map(url => ({
           election_id: savedElection.id,
           source_url: url,
           source_external_id: url,
           status: "discovered",
-          evidence_status: "stored",
+          evidence_status: "remote_only",
           storage_policy: "ephemeral",
         }));
-
-        const { error } = await supabase
-          .from("result_sheets")
-          .upsert(rows, { onConflict: "election_id,source_url", ignoreDuplicates: true });
-
+        const { error } = await supabase.from("result_sheets").upsert(rows, { onConflict: "election_id,source_url", ignoreDuplicates: true });
         if (!error) resultSheetsDiscovered += rows.length;
-      } catch {
-        // One inaccessible election page must not stop the entire discovery run.
-      }
+      } catch { /* continue with other elections */ }
     }
-
     await supabase.from("pipeline_runs").insert({
-      started_at: startedAt,
-      finished_at: new Date().toISOString(),
-      status: "completed",
-      discovered: elections.length,
-      metadata: {
-        source: "IReV",
-        mode: "server-side-discovery",
-        result_sheets_discovered: resultSheetsDiscovered,
-      },
+      started_at: startedAt, finished_at: new Date().toISOString(), status: "completed", trigger_source: "server",
+      discovered: elections.length, metadata: { source: "IReV", mode: "server-side-discovery", result_sheets_discovered: resultSheetsDiscovered },
     });
-
-    return new Response(JSON.stringify({
-      ok: true,
-      discovered: elections.length,
-      result_sheets_discovered: resultSheetsDiscovered,
-      elections,
-      source: "https://inecelectionresults.ng/",
-    }), { headers: { "content-type": "application/json" } });
+    return new Response(JSON.stringify({ ok: true, discovered: elections.length, result_sheets_discovered: resultSheetsDiscovered }), { headers: { "content-type": "application/json" } });
   } catch (error) {
     await supabase.from("pipeline_runs").insert({
-      started_at: startedAt,
-      finished_at: new Date().toISOString(),
-      status: "failed",
-      failed: 1,
-      issues: [{ message: error instanceof Error ? error.message : String(error) }],
-      metadata: { source: "IReV", mode: "server-side-discovery" },
+      started_at: startedAt, finished_at: new Date().toISOString(), status: "failed", trigger_source: "server", failed: 1,
+      issues: [{ message: error instanceof Error ? error.message : String(error) }], metadata: { source: "IReV" },
     });
-
-    return new Response(JSON.stringify({
-      ok: false,
-      error: error instanceof Error ? error.message : String(error),
-    }), { status: 500, headers: { "content-type": "application/json" } });
+    return new Response(JSON.stringify({ ok: false, error: error instanceof Error ? error.message : String(error) }), { status: 500, headers: { "content-type": "application/json" } });
   }
 });
