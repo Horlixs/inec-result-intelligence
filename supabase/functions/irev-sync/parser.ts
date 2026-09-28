@@ -36,7 +36,7 @@ function toElectionUrl(href: string, origin: string): string | null {
 
 function externalIdFor(sourceUrl: string): string {
   return "irev:" + sourceUrl
-    .replace(/^https:\/\/inecelectionresults\.ng\//, "")
+    .replace(/^https:\/\/(?:inecelectionresults\.ng|irev\.inecnigeria\.org)\//, "")
     .replace(/[^a-zA-Z0-9]+/g, "-")
     .slice(0, 180);
 }
@@ -70,7 +70,7 @@ export function discoverFromHtml(html: string, origin = "https://inecelectionres
   // Some IReV pages expose routes inside serialized state/scripts rather than
   // ordinary anchor tags. Capture direct election routes without over-escaping
   // the regular expression so the Edge Runtime parser can compile it.
-  const routePattern = /(?:https?:\/\/inecelectionresults\.ng)?(\/elections\/[A-Za-z0-9_-]+(?:[?][^"'\s<>\\]*)?)/gi;
+  const routePattern = /(?:https:\/\/(?:inecelectionresults\.ng|irev\.inecnigeria\.org))?(\/elections\/[A-Za-z0-9_-]+(?:[?][^"'\s<>\\]*)?)/gi;
   for (const match of html.matchAll(routePattern)) {
     const election = electionFromLink(match[1], "", origin);
     if (election && !found.has(election.external_id)) found.set(election.external_id, election);
