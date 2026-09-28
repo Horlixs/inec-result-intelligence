@@ -40,10 +40,17 @@ async function extractWithGemini(bytes: Uint8Array, mime: string) {
 {"pollingUnitName":string|null,"pollingUnitCode":string|null,"registeredVoters":number|null,"accreditedVoters":number|null,"rejectedVotes":number|null,"candidates":[{"label":string,"votes":number|null}],"confidence":number}
 Do not guess. If a value is unreadable, use null. Preserve candidate labels as written. confidence must be between 0 and 1.`;
 
+  let binary = "";
+  const chunkSize = 0x8000;
+  for (let i = 0; i < bytes.length; i += chunkSize) {
+    binary += String.fromCharCode(...bytes.subarray(i, Math.min(i + chunkSize, bytes.length)));
+  }
+  const base64 = btoa(binary);
+
   const body = {
     contents: [{ parts: [
       { text: prompt },
-      { inline_data: { mime_type: mime, data: btoa(String.fromCharCode(...bytes)) } },
+      { inline_data: { mime_type: mime, data: base64 } },
     ]}],
     generationConfig: { temperature: 0, responseMimeType: "application/json" },
   };
