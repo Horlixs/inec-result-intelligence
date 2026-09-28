@@ -15,7 +15,7 @@ function asCandidate(value: unknown): { label: string; votes: number | null } { 
 function toExtractedResult(value: unknown): ExtractedResult | null {
   if (!isRecord(value) || !Array.isArray(value.candidates)) return null;
   const raw: RawExtraction = value;
-  const candidates = raw.candidates;
+  const candidates: unknown[] = raw.candidates;
   return {
     pollingUnitName: raw.pollingUnitName == null ? null : String(raw.pollingUnitName),
     pollingUnitCode: raw.pollingUnitCode == null ? null : String(raw.pollingUnitCode),
