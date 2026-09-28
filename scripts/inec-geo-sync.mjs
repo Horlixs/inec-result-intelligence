@@ -1,61 +1,4 @@
-import { createRequire } from "node:module";
-
-const require = createRequire(import.meta.url);
-const geo = require("nigeria-inec-geo");
-
-const SUPABASE_URL = process.env.SUPABASE_URL;
-const SERVICE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY;
-
-if (!SUPABASE_URL || !SERVICE_KEY) {
-  throw new Error("SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY are required");
-}
-
-const BATCH_SIZE = 500;
-
-async function upsert(table, rows, onConflict) {
-  for (let i = 0; i < rows.length; i += BATCH_SIZE) {
-    const batch = rows.slice(i, i + BATCH_SIZE);
-    const url = new URL(SUPABASE_URL + "/rest/v1/" + table);
-    url.searchParams.set("on_conflict", onConflict);
-    const response = await fetch(url, {
-      method: "POST",
-      headers: {
-        apikey: SERVICE_KEY,
-        Authorization: "Bearer " + SERVICE_KEY,
-        "Content-Type": "application/json",
-        Prefer: "resolution=merge-duplicates,return=minimal",
-      },
-      body: JSON.stringify(batch),
-    });
-    if (!response.ok) throw new Error("Supabase " + table + " failed: " + await response.text());
-    process.stdout.write("\r" + table + ": " + Math.min(i + batch.length, rows.length) + "/" + rows.length);
-  }
-  process.stdout.write("\n");
-}
-
-async function selectIds(table, filterColumn, filterValue, select = "id") {
-  const url = new URL(SUPABASE_URL + "/rest/v1/" + table);
-  url.searchParams.set(filterColumn, "eq." + filterValue);
-  url.searchParams.set("select", select);
-  const response = await fetch(url, {
-    headers: { apikey: SERVICE_KEY, Authorization: "Bearer " + SERVICE_KEY },
-  });
-  if (!response.ok) throw new Error("Could not resolve " + table + ": " + await response.text());
-  return response.json();
-}
-
-const states = geo.states();
-const lgas = geo.lgas();
-const wards = geo.wards();
-const pollingUnits = geo.pollingUnits();
-
-const stateRows = states.map((item) => ({
-  name: item.name,
-  code: String(item.code).padStart(2, "0"),
-}));
-await upsert("states", stateRows, "code");
-
-const stateRowsDb = await selectIds("states", "code", "not.null", "id,code");
+const stateRowsDb = await upsert("states", stateRows, "code");
 const stateIds = new Map(stateRowsDb.map((row) => [row.code, row.id]));
 
 const lgaRows = lgas.map((item) => {
@@ -67,9 +10,7 @@ const lgaRows = lgas.map((item) => {
     name: item.name,
   };
 });
-await upsert("lgas", lgaRows, "state_id,code");
-
-const lgaRowsDb = await selectIds("lgas", "code", "not.null", "id,state_id,code");
+const lgaRowsDb = await upsert("lgas", lgaRows, "state_id,code");
 const lgaIds = new Map(lgaRowsDb.map((row) => [row.state_id + "/" + row.code, row.id]));
 
 const wardRows = wards.map((item) => {
@@ -84,9 +25,7 @@ const wardRows = wards.map((item) => {
     external_id: item.full_code ?? null,
   };
 });
-await upsert("wards", wardRows, "lga_id,code");
-
-const wardRowsDb = await selectIds("wards", "code", "not.null", "id,lga_id,code");
+const wardRowsDb = await upsert("wards", wardRows, "lga_id,code");
 const wardIds = new Map(wardRowsDb.map((row) => [row.lga_id + "/" + row.code, row.id]));
 
 const puRows = pollingUnits.map((item) => {
