@@ -107,6 +107,16 @@ Deno.serve(async (request) => {
 
     const homepageHtml = await response.text();
     const discovered = new Map<string, ReturnType<typeof discoverFromHtml>[number]>();
+    const homepageDiagnostics = {
+      http_status: response.status,
+      content_type: response.headers.get("content-type"),
+      content_length: response.headers.get("content-length"),
+      html_length: homepageHtml.length,
+      contains_elections_text: /elections/i.test(homepageHtml),
+      contains_dawakin_text: /dawakin/i.test(homepageHtml),
+      contains_next_data: /__NEXT_DATA__|_next/i.test(homepageHtml),
+      sample: homepageHtml.slice(0, 500),
+    };
     for (const election of discoverFromHtml(homepageHtml)) discovered.set(election.external_id, election);
 
     // The current IReV homepage is application-driven and may expose the
@@ -214,6 +224,8 @@ Deno.serve(async (request) => {
         mode: "server-side-bounded-crawl",
         result_sheets_discovered: resultSheetsDiscovered,
         elections: electionStats,
+        homepage: homepageDiagnostics,
+        scanned_directory_pages: scannedDirectoryPages,
       },
     });
 
@@ -222,6 +234,10 @@ Deno.serve(async (request) => {
       discovered: elections.length,
       result_sheets_discovered: resultSheetsDiscovered,
       elections: electionStats,
+      diagnostics: {
+        homepage: homepageDiagnostics,
+        scanned_directory_pages: scannedDirectoryPages,
+      },
     }), {
       headers: { "content-type": "application/json" },
     });
