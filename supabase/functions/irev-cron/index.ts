@@ -5,6 +5,10 @@ const supabase = createClient(url, key);
 
 Deno.serve(async request => {
   if (request.method !== "POST") return new Response(JSON.stringify({ error: "POST required" }), { status: 405 });
+  const configuredSecret = Deno.env.get("IREV_CRON_SECRET");
+  if (configuredSecret && request.headers.get("x-cron-secret") !== configuredSecret) {
+    return new Response(JSON.stringify({ ok: false, error: "Unauthorized scheduler request" }), { status: 401 });
+  }
   const { data: schedule, error } = await supabase.from("pipeline_schedule").select("*").eq("name", "irev-refresh").eq("enabled", true).single();
   if (error || !schedule) return new Response(JSON.stringify({ ok: false, error: error?.message || "Schedule disabled" }), { status: 409 });
   const now = new Date();
