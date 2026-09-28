@@ -1,14 +1,56 @@
+import { createRequire } from "node:module";
+
+const require = createRequire(import.meta.url);
+const geo = require("nigeria-inec-geo");
+
+const SUPABASE_URL = process.env.SUPABASE_URL;
+const SERVICE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY;
+
+if (!SUPABASE_URL || !SERVICE_KEY) throw new Error("SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY are required");
+
+const BATCH_SIZE = 500;
+
+async function upsert(table, rows, onConflict) {
+  const results = [];
+  for (let i = 0; i < rows.length; i += BATCH_SIZE) {
+    const batch = rows.slice(i, i + BATCH_SIZE);
+    const url = new URL(SUPABASE_URL + "/rest/v1/" + table);
+    url.searchParams.set("on_conflict", onConflict);
+    const response = await fetch(url, {
+      method: "POST",
+      headers: {
+        apikey: SERVICE_KEY,
+        Authorization: "Bearer " + SERVICE_KEY,
+        "Content-Type": "application/json",
+        Prefer: "resolution=merge-duplicates,return=representation",
+      },
+      body: JSON.stringify(batch),
+    });
+    if (!response.ok) throw new Error("Supabase " + table + " failed: " + await response.text());
+    results.push(...await response.json());
+    process.stdout.write("\r" + table + ": " + Math.min(i + batch.length, rows.length) + "/" + rows.length);
+  }
+  process.stdout.write("\n");
+  return results;
+}
+
+const states = geo.states();
+const lgas = geo.lgas();
+const wards = geo.wards();
+const pollingUnits = geo.pollingUnits();
+
+const stateRows = states.map((item) => ({
+  name: item.name,
+  code: String(item.code).padStart(2, "0"),
+}));
 const stateRowsDb = await upsert("states", stateRows, "code");
 const stateIds = new Map(stateRowsDb.map((row) => [row.code, row.id]));
 
 const lgaRows = lgas.map((item) => {
   const stateCode = String(item.state_code ?? item.stateCode).padStart(2, "0");
-  if (!stateIds.has(stateCode)) throw new Error("Unknown state code " + stateCode);
-  return {
-    state_id: stateIds.get(stateCode),
-    code: String(item.code).padStart(2, "0"),
-    name: item.name,
-  };
+  const stateId = stateIds.get(stateCode);
+  if (!stateId) throw new Error("Unknown state code " + stateCode);
+  return { state_id: stateId, code: String(item.code).padStart(2, "0"), name: item.name };
 });
 const lgaRowsDb = await upsert("lgas", lgaRows, "state_id,code");
 const lgaIds = new Map(lgaRowsDb.map((row) => [row.state_id + "/" + row.code, row.id]));
@@ -18,12 +60,7 @@ const wardRows = wards.map((item) => {
   const lgaCode = String(item.lga_code ?? item.lgaCode).padStart(2, "0");
   const lgaId = lgaIds.get(stateIds.get(stateCode) + "/" + lgaCode);
   if (!lgaId) throw new Error("Unknown LGA " + stateCode + "/" + lgaCode + " for ward " + item.name);
-  return {
-    lga_id: lgaId,
-    code: String(item.code).padStart(2, "0"),
-    name: item.name,
-    external_id: item.full_code ?? null,
-  };
+  return { lga_id: lgaId, code: String(item.code).padStart(2, "0"), name: item.name, external_id: item.full_code ?? null };
 });
 const wardRowsDb = await upsert("wards", wardRows, "lga_id,code");
 const wardIds = new Map(wardRowsDb.map((row) => [row.lga_id + "/" + row.code, row.id]));
