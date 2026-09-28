@@ -1,0 +1,28 @@
+name: IReV Refresh
+
+on:
+  schedule:
+    - cron: "17 * * * *"
+  workflow_dispatch:
+
+jobs:
+  refresh:
+    runs-on: ubuntu-slim
+    timeout-minutes: 10
+    steps:
+      - name: Trigger IReV refresh
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_ANON_KEY: ${{ secrets.SUPABASE_ANON_KEY }}
+          IREV_CRON_SECRET: ${{ secrets.IREV_CRON_SECRET }}
+        run: |
+          test -n "$SUPABASE_URL"
+          test -n "$SUPABASE_ANON_KEY"
+          test -n "$IREV_CRON_SECRET"
+          curl --fail-with-body --silent --show-error \
+            -X POST "$SUPABASE_URL/functions/v1/irev-cron" \
+            -H "Authorization: Bearer $SUPABASE_ANON_KEY" \
+            -H "apikey: $SUPABASE_ANON_KEY" \
+            -H "x-cron-secret: $IREV_CRON_SECRET" \
+            -H "Content-Type: application/json" \
+            -d '{"trigger":"github-actions"}'
