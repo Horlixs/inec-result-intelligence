@@ -9,7 +9,8 @@
     "preview": "vite",
     "lint": "eslint .",
     "irev:discover": "node scripts/irev-discover.mjs",
-    "irev:inspect": "node scripts/irev-inspect.mjs"
+    "irev:inspect": "node scripts/irev-inspect.mjs",
+    "inec:discover": "node scripts/inec-source-discover.mjs"
   },
   "dependencies": {
     "@tanstack/react-router": "^1.132.0",
