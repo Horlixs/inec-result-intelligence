@@ -1,6 +1,7 @@
 import { classifyElection, discoverFromHtml, extractSameOriginLinks } from "./parser.ts";
 
 const ORIGIN = "https://inecelectionresults.ng";
+const CURRENT_IREV_ORIGIN = "https://irev.inecnigeria.org";
 const UA = "INEC-Result-Intelligence/1.0 source-collector";
 const API_BASES = [
   "https://dolphin-app-sleqh.ondigitalocean.app/api/v1",
@@ -56,12 +57,12 @@ function supabaseError(label: string, result: { response: Response; body: unknow
   return new Error(`${label} failed (HTTP ${result.response.status}): ${detail.slice(0, 1000)}`);
 }
 
-function extractLinks(html: string, pageUrl: string): string[] {
+function extractLinks(html: string, pageUrl: string, allowedOrigin = ORIGIN): string[] {
   const links = new Set<string>();
   const add = (value: string) => {
     try {
       const url = new URL(value, pageUrl);
-      if (url.origin !== ORIGIN || url.protocol !== "https:") return;
+      if (url.origin !== allowedOrigin || url.protocol !== "https:") return;
       links.add(url.toString());
     } catch {}
   };
@@ -79,10 +80,10 @@ function isDocumentUrl(url: string): boolean {
   } catch { return false; }
 }
 
-function isCrawlablePage(url: string): boolean {
+function isCrawlablePage(url: string, allowedOrigin = ORIGIN): boolean {
   try {
     const parsed = new URL(url);
-    return parsed.origin === ORIGIN && parsed.pathname.toLowerCase().startsWith("/elections/") && !isDocumentUrl(url);
+    return parsed.origin === allowedOrigin && parsed.pathname.toLowerCase().startsWith("/elections/") && !isDocumentUrl(url);
   } catch { return false; }
 }
 
@@ -155,7 +156,28 @@ async function discoverFromIrevApi() {
   return { elections: [...found.values()], attempts };
 }
 
+async function discoverFromCurrentIrevDirectory(): Promise<{ elections: ReturnType<typeof discoverFromHtml>; attempts: Array<Record<string, unknown>> }> {
+  const elections = new Map<string, ReturnType<typeof discoverFromHtml>[number]>();
+  const attempts: Array<Record<string, unknown>> = [];
+
+  for (const typeId of KNOWN_ELECTION_TYPE_IDS) {
+    const url = CURRENT_IREV_ORIGIN + "/elections/types/" + typeId;
+    try {
+      const response = await fetch(url, { headers: { "user-agent": UA, accept: "text/html,application/xhtml+xml" } });
+      const html = await response.text();
+      attempts.push({ origin: CURRENT_IREV_ORIGIN, endpoint: "/elections/types/" + typeId, status: response.status, content_type: response.headers.get("content-type"), length: html.length });
+      if (!response.ok) continue;
+      for (const election of discoverFromHtml(html, CURRENT_IREV_ORIGIN)) elections.set(election.external_id, election);
+    } catch (error) {
+      attempts.push({ origin: CURRENT_IREV_ORIGIN, endpoint: "/elections/types/" + typeId, error: error instanceof Error ? error.message : String(error) });
+    }
+  }
+
+  return { elections: [...elections.values()], attempts };
+}
+
 async function crawlElection(sourceUrl: string): Promise<string[]> {
+  const sourceOrigin = new URL(sourceUrl).origin;
   const queue: Array<{ url: string; depth: number }> = [{ url: sourceUrl, depth: 0 }];
   const visited = new Set<string>();
   const resultPages = new Set<string>();
@@ -169,9 +191,9 @@ async function crawlElection(sourceUrl: string): Promise<string[]> {
     const contentType = (response.headers.get("content-type") || "").toLowerCase();
     if (!contentType.includes("text/html")) { if (isDocumentUrl(current.url)) resultPages.add(current.url); continue; }
     const html = await response.text();
-    for (const link of extractLinks(html, current.url)) {
+    for (const link of extractLinks(html, current.url, sourceOrigin)) {
       if (isDocumentUrl(link)) resultPages.add(link);
-      else if (current.depth < 4 && isCrawlablePage(link) && !visited.has(link)) queue.push({ url: link, depth: current.depth + 1 });
+      else if (current.depth < 4 && isCrawlablePage(link, sourceOrigin) && !visited.has(link)) queue.push({ url: link, depth: current.depth + 1 });
     }
   }
   return [...resultPages];
@@ -195,6 +217,10 @@ Deno.serve(async request => {
     const discovered = new Map<string, ReturnType<typeof discoverFromHtml>[number]>();
     const apiDiscovery = await discoverFromIrevApi();
     for (const election of apiDiscovery.elections) discovered.set(election.external_id, election);
+
+    stage = "discover_current_irev_directory";
+    const currentDirectory = await discoverFromCurrentIrevDirectory();
+    for (const election of currentDirectory.elections) discovered.set(election.external_id, election);
 
     const homepageDiagnostics = { http_status: response.status, content_type: response.headers.get("content-type"), content_length: response.headers.get("content-length"), html_length: homepageHtml.length, contains_elections_text: /elections/i.test(homepageHtml), contains_dawakin_text: /dawakin/i.test(homepageHtml), contains_next_data: /__NEXT_DATA__|_next/i.test(homepageHtml), sample: homepageHtml.slice(0, 500) };
     for (const election of discoverFromHtml(homepageHtml)) discovered.set(election.external_id, election);
