@@ -21,95 +21,56 @@ function extractLinks(html: string, pageUrl: string): string[] {
       const url = new URL(value, pageUrl);
       if (url.origin !== ORIGIN || url.protocol !== "https:") return;
       links.add(url.toString());
-    } catch { /* ignore malformed URLs */ }
+    } catch {}
   };
-
   const anchors = /<a\b[^>]*href=["']([^"']+)["'][^>]*>/gi;
   for (const match of html.matchAll(anchors)) add(match[1]);
-
   const media = /<(?:img|iframe|embed|object)\b[^>]*(?:src|data)=["']([^"']+)["'][^>]*>/gi;
   for (const match of html.matchAll(media)) add(match[1]);
-
   return [...links];
 }
 
 function isDocumentUrl(url: string): boolean {
   try {
-    const parsed = new URL(url);
-    const path = parsed.pathname.toLowerCase();
-    return /\/document(?:$|\/)/.test(path) ||
-      /\.(pdf|jpe?g|png|webp)$/i.test(path) ||
-      /result|resultsheet|sheet|upload/.test(path);
-  } catch {
-    return false;
-  }
+    const path = new URL(url).pathname.toLowerCase();
+    return /\/document(?:$|\/)/.test(path) || /\.(pdf|jpe?g|png|webp)$/i.test(path) || /result|resultsheet|sheet|upload/.test(path);
+  } catch { return false; }
 }
 
 function isCrawlablePage(url: string): boolean {
   try {
     const parsed = new URL(url);
-    if (parsed.origin !== ORIGIN) return false;
-    const path = parsed.pathname.toLowerCase();
-    return path.startsWith("/elections/") && !isDocumentUrl(url);
-  } catch {
-    return false;
-  }
+    return parsed.origin === ORIGIN && parsed.pathname.toLowerCase().startsWith("/elections/") && !isDocumentUrl(url);
+  } catch { return false; }
 }
 
 const KNOWN_ELECTION_TYPE_IDS = [
-  "5f129a04df41d910dcdc1d50",
-  "5f129a04df41d910dcdc1d51",
-  "5f129a04df41d910dcdc1d52",
-  "5f129a04df41d910dcdc1d53",
-  "5f129a04df41d910dcdc1d54",
-  "5f129a04df41d910dcdc1d55",
+  "5f129a04df41d910dcdc1d50", "5f129a04df41d910dcdc1d51", "5f129a04df41d910dcdc1d52",
+  "5f129a04df41d910dcdc1d53", "5f129a04df41d910dcdc1d54", "5f129a04df41d910dcdc1d55",
   "5f129a04df41d910dcdc1d56",
 ];
-
-// IReV's /elections endpoint becomes very slow when asked for an entire
-// election type. The public SPA scopes that request by state_id. INEC's
-// state_id sequence is stable: Abia=1 ... FCT=15 ... Zamfara=37.
 const KNOWN_STATE_IDS = Array.from({ length: 37 }, (_, index) => index + 1);
 const ELECTION_DISCOVERY_CONCURRENCY = 20;
 
 async function discoverElectionTypeIds(base: string, attempts: Array<Record<string, unknown>>): Promise<string[]> {
-  const url = base + "/election-types";
   try {
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), 10000);
-    const response = await fetch(url, {
+    const response = await fetch(base + "/election-types", {
       method: "GET", signal: controller.signal,
-      headers: {
-        "user-agent": UA, accept: "application/json, text/plain, */*",
-        origin: ORIGIN, referer: ORIGIN + "/", "x-api-key": PUBLIC_INEC_CLIENT_KEY,
-        "x-api-rt": String(Date.now()),
-      },
+      headers: { "user-agent": UA, accept: "application/json, text/plain, */*", origin: ORIGIN, referer: ORIGIN + "/", "x-api-key": PUBLIC_INEC_CLIENT_KEY, "x-api-rt": String(Date.now()) },
     });
     clearTimeout(timeout);
     const body = await response.text();
-    attempts.push({
-      base,
-      endpoint: "election-types",
-      status: response.status,
-      content_type: response.headers.get("content-type"),
-      length: body.length,
-      preview: body.slice(0, 240),
-    });
+    attempts.push({ base, endpoint: "election-types", status: response.status, content_type: response.headers.get("content-type"), length: body.length, preview: body.slice(0, 240) });
     if (!response.ok || !body) return KNOWN_ELECTION_TYPE_IDS;
     const payload: unknown = JSON.parse(body);
-    const rows = Array.isArray(payload) ? payload :
-      payload && typeof payload === "object" && Array.isArray((payload as Record<string, unknown>).data)
-        ? (payload as Record<string, unknown>).data : [];
-    const ids = (rows as Array<Record<string, unknown>>)
-      .map((row) => String(row._id ?? row.id ?? row.election_type_id ?? "").trim())
-      .filter((id) => /^[a-f0-9]{24}$/i.test(id));
-    return [...new Set(ids)].length ? [...new Set(ids)] : KNOWN_ELECTION_TYPE_IDS;
+    const rawRows = Array.isArray(payload) ? payload : payload && typeof payload === "object" && Array.isArray((payload as Record<string, unknown>).data) ? (payload as Record<string, unknown>).data : [];
+    const rows = rawRows.filter((row): row is Record<string, unknown> => !!row && typeof row === "object");
+    const ids = rows.map(row => String(row._id ?? row.id ?? row.election_type_id ?? "").trim()).filter(id => /^[a-f0-9]{24}$/i.test(id));
+    return ids.length ? [...new Set(ids)] : KNOWN_ELECTION_TYPE_IDS;
   } catch (error) {
-    attempts.push({
-      base,
-      endpoint: "election-types",
-      error: error instanceof Error ? error.message : String(error),
-    });
+    attempts.push({ base, endpoint: "election-types", error: error instanceof Error ? error.message : String(error) });
     return KNOWN_ELECTION_TYPE_IDS;
   }
 }
@@ -118,20 +79,14 @@ async function discoverFromIrevApi() {
   const found = new Map<string, ReturnType<typeof discoverFromHtml>[number]>();
   const attempts: Array<Record<string, unknown>> = [];
 
-  const recordRows = (rows: unknown) => {
-    if (!Array.isArray(rows)) return;
-
-    for (const row of rows as Array<Record<string, unknown>>) {
+  const recordRows = (rawRows: unknown) => {
+    if (!Array.isArray(rawRows)) return;
+    const rows = rawRows.filter((row): row is Record<string, unknown> => !!row && typeof row === "object");
+    for (const row of rows) {
       const id = String(row._id ?? row.id ?? row.election_id ?? "").trim();
       if (!id) continue;
-
-      const name = String(
-        row.full_name ?? row.name ?? row.title ?? row.election_name ?? id,
-      ).trim();
-
-      const electionDate =
-        String(row.election_date ?? row.date ?? "").trim() || null;
-
+      const name = String(row.full_name ?? row.name ?? row.title ?? row.election_name ?? id).trim();
+      const electionDate = String(row.election_date ?? row.date ?? "").trim() || null;
       found.set("irev:" + id, {
         external_id: "irev:" + id,
         name,
@@ -143,187 +98,79 @@ async function discoverFromIrevApi() {
     }
   };
 
-  const requestElectionList = async (
-    base: string,
-    electionTypeId: string,
-    stateId: number,
-  ): Promise<boolean> => {
-    const params = new URLSearchParams({
-      election_type: electionTypeId,
-      state_id: String(stateId),
-    });
-    const url = base + "/elections?" + params.toString();
-
+  const requestElectionList = async (base: string, electionTypeId: string, stateId: number): Promise<boolean> => {
+    const url = base + "/elections?" + new URLSearchParams({ election_type: electionTypeId, state_id: String(stateId) }).toString();
     try {
       const controller = new AbortController();
       const timeout = setTimeout(() => controller.abort(), 4000);
-
       const response = await fetch(url, {
-        method: "GET",
-        signal: controller.signal,
-        headers: {
-          "user-agent": UA,
-          accept: "application/json, text/plain, */*",
-          origin: ORIGIN,
-          referer: ORIGIN + "/",
-          "x-api-key": PUBLIC_INEC_CLIENT_KEY,
-          "x-api-rt": String(Date.now()),
-        },
+        method: "GET", signal: controller.signal,
+        headers: { "user-agent": UA, accept: "application/json, text/plain, */*", origin: ORIGIN, referer: ORIGIN + "/", "x-api-key": PUBLIC_INEC_CLIENT_KEY, "x-api-rt": String(Date.now()) },
       });
-
       clearTimeout(timeout);
-
       const body = await response.text();
-      attempts.push({
-        base,
-        endpoint: "elections",
-        election_type: electionTypeId,
-        state_id: stateId,
-        status: response.status,
-        content_type: response.headers.get("content-type"),
-        length: body.length,
-        preview: body.slice(0, 160),
-      });
-
+      attempts.push({ base, endpoint: "elections", election_type: electionTypeId, state_id: stateId, status: response.status, content_type: response.headers.get("content-type"), length: body.length, preview: body.slice(0, 160) });
       if (!response.ok || !body) return false;
-
       let payload: unknown;
-      try {
-        payload = JSON.parse(body);
-      } catch {
-        return false;
-      }
-
-      const rows =
-        Array.isArray(payload)
-          ? payload
-          : payload &&
-              typeof payload === "object" &&
-              Array.isArray((payload as Record<string, unknown>).data)
-            ? (payload as Record<string, unknown>).data
-            : [];
-
-      recordRows(rows);
-      return rows.length > 0;
+      try { payload = JSON.parse(body); } catch { return false; }
+      const rawRows = Array.isArray(payload) ? payload : payload && typeof payload === "object" && Array.isArray((payload as Record<string, unknown>).data) ? (payload as Record<string, unknown>).data : [];
+      recordRows(rawRows);
+      return Array.isArray(rawRows) && rawRows.length > 0;
     } catch (error) {
-      attempts.push({
-        base,
-        endpoint: "elections",
-        election_type: electionTypeId,
-        state_id: stateId,
-        error: error instanceof Error ? error.message : String(error),
-      });
+      attempts.push({ base, endpoint: "elections", election_type: electionTypeId, state_id: stateId, error: error instanceof Error ? error.message : String(error) });
       return false;
     }
   };
 
   for (const base of API_BASES) {
     const electionTypeIds = await discoverElectionTypeIds(base, attempts);
-
-    // The official IReV SPA scopes election discovery by state_id. The
-    // unscoped /elections?election_type=... request is prone to 504s because
-    // it asks the upstream for an unnecessarily large dataset.
     const jobs: Array<{ electionTypeId: string; stateId: number }> = [];
-    for (const electionTypeId of electionTypeIds) {
-      for (const stateId of KNOWN_STATE_IDS) {
-        jobs.push({ electionTypeId, stateId });
-      }
-    }
-
+    for (const electionTypeId of electionTypeIds) for (const stateId of KNOWN_STATE_IDS) jobs.push({ electionTypeId, stateId });
     for (let offset = 0; offset < jobs.length; offset += ELECTION_DISCOVERY_CONCURRENCY) {
-      const batch = jobs.slice(
-        offset,
-        offset + ELECTION_DISCOVERY_CONCURRENCY,
-      );
-
-      await Promise.all(
-        batch.map(({ electionTypeId, stateId }) =>
-          requestElectionList(base, electionTypeId, stateId)
-        ),
-      );
+      const batch = jobs.slice(offset, offset + ELECTION_DISCOVERY_CONCURRENCY);
+      await Promise.all(batch.map(({ electionTypeId, stateId }) => requestElectionList(base, electionTypeId, stateId)));
     }
-
-    // Once one API host has produced election records, do not spend another
-    // full 259-request pass against a legacy/sibling host.
     if (found.size > 0) break;
   }
-
   return { elections: [...found.values()], attempts };
 }
+
 async function crawlElection(sourceUrl: string): Promise<string[]> {
   const queue: Array<{ url: string; depth: number }> = [{ url: sourceUrl, depth: 0 }];
   const visited = new Set<string>();
   const resultPages = new Set<string>();
-  const maxPages = 750;
-
-  while (queue.length && visited.size < maxPages) {
+  while (queue.length && visited.size < 750) {
     const current = queue.shift()!;
     if (visited.has(current.url)) continue;
     visited.add(current.url);
-
     let response: Response;
-    try {
-      response = await fetch(current.url, { headers: { "user-agent": UA } });
-    } catch {
-      continue;
-    }
+    try { response = await fetch(current.url, { headers: { "user-agent": UA } }); } catch { continue; }
     if (!response.ok) continue;
-
     const contentType = (response.headers.get("content-type") || "").toLowerCase();
-    if (!contentType.includes("text/html")) {
-      if (isDocumentUrl(current.url)) resultPages.add(current.url);
-      continue;
-    }
-
+    if (!contentType.includes("text/html")) { if (isDocumentUrl(current.url)) resultPages.add(current.url); continue; }
     const html = await response.text();
     for (const link of extractLinks(html, current.url)) {
-      if (isDocumentUrl(link)) {
-        resultPages.add(link);
-        continue;
-      }
-      if (current.depth < 4 && isCrawlablePage(link) && !visited.has(link)) {
-        queue.push({ url: link, depth: current.depth + 1 });
-      }
+      if (isDocumentUrl(link)) resultPages.add(link);
+      else if (current.depth < 4 && isCrawlablePage(link) && !visited.has(link)) queue.push({ url: link, depth: current.depth + 1 });
     }
   }
-
   return [...resultPages];
 }
 
-Deno.serve(async (request) => {
-  if (request.method !== "POST") {
-    return new Response(JSON.stringify({ error: "POST required" }), {
-      status: 405,
-      headers: { "content-type": "application/json" },
-    });
-  }
-
+Deno.serve(async request => {
   const startedAt = new Date().toISOString();
+  if (request.method !== "POST") return new Response(JSON.stringify({ ok: false, error: "POST required" }), { status: 405, headers: { "content-type": "application/json" } });
 
   try {
     const response = await fetch(ORIGIN + "/", { headers: { "user-agent": UA } });
     if (!response.ok) throw new Error("IReV returned HTTP " + response.status);
-
     const homepageHtml = await response.text();
     const discovered = new Map<string, ReturnType<typeof discoverFromHtml>[number]>();
     const apiDiscovery = await discoverFromIrevApi();
     for (const election of apiDiscovery.elections) discovered.set(election.external_id, election);
-    const homepageDiagnostics = {
-      http_status: response.status,
-      content_type: response.headers.get("content-type"),
-      content_length: response.headers.get("content-length"),
-      html_length: homepageHtml.length,
-      contains_elections_text: /elections/i.test(homepageHtml),
-      contains_dawakin_text: /dawakin/i.test(homepageHtml),
-      contains_next_data: /__NEXT_DATA__|_next/i.test(homepageHtml),
-      sample: homepageHtml.slice(0, 500),
-    };
+    const homepageDiagnostics = { http_status: response.status, content_type: response.headers.get("content-type"), content_length: response.headers.get("content-length"), html_length: homepageHtml.length, contains_elections_text: /elections/i.test(homepageHtml), contains_dawakin_text: /dawakin/i.test(homepageHtml), contains_next_data: /__NEXT_DATA__|_next/i.test(homepageHtml), sample: homepageHtml.slice(0, 500) };
     for (const election of discoverFromHtml(homepageHtml)) discovered.set(election.external_id, election);
 
-    // The current IReV homepage is application-driven and may expose the
-    // election directory through category/navigation pages instead of direct
-    // anchor tags in the initial HTML. Follow a small bounded set of same-origin
-    // HTML links so discovery does not depend on the homepage rendering mode.
     const queue = extractSameOriginLinks(homepageHtml);
     const visited = new Set<string>([ORIGIN + "/"]);
     let scannedDirectoryPages = 0;
@@ -331,136 +178,51 @@ Deno.serve(async (request) => {
       const pageUrl = queue.shift()!;
       if (visited.has(pageUrl)) continue;
       visited.add(pageUrl);
-
       let pageResponse: Response;
-      try {
-        pageResponse = await fetch(pageUrl, { headers: { "user-agent": UA } });
-      } catch {
-        continue;
-      }
+      try { pageResponse = await fetch(pageUrl, { headers: { "user-agent": UA } }); } catch { continue; }
       if (!pageResponse.ok) continue;
-      const contentType = (pageResponse.headers.get("content-type") || "").toLowerCase();
-      if (!contentType.includes("text/html")) continue;
-
+      if (!(pageResponse.headers.get("content-type") || "").toLowerCase().includes("text/html")) continue;
       scannedDirectoryPages++;
       const pageHtml = await pageResponse.text();
       for (const election of discoverFromHtml(pageHtml)) discovered.set(election.external_id, election);
-
       for (const link of extractSameOriginLinks(pageHtml)) {
-        try {
-          const parsed = new URL(link);
-          if (!visited.has(link) && !parsed.pathname.toLowerCase().startsWith("/elections/")) {
-            queue.push(link);
-          }
-        } catch {
-          // ignore malformed links
-        }
+        try { if (!visited.has(link) && !new URL(link).pathname.toLowerCase().startsWith("/elections/")) queue.push(link); } catch {}
       }
     }
 
     const elections = [...discovered.values()];
-
     if (elections.length) {
-      const { error } = await supabase
-        .from("elections")
-        .upsert(elections, { onConflict: "external_id" });
-      if (error) throw error;
+      const result = await supabase.from("elections").upsert(elections, { onConflict: "external_id" });
+      if (result.error) throw new Error("elections upsert failed: " + result.error.message);
     }
 
     let resultSheetsDiscovered = 0;
     const electionStats: Array<Record<string, unknown>> = [];
-
     for (const election of elections) {
       try {
-        const { data: savedElection } = await supabase
-          .from("elections")
-          .select("id")
-          .eq("external_id", election.external_id)
-          .maybeSingle();
-
-        if (!savedElection?.id) continue;
-
+        const lookup = await supabase.from("elections").select("id").eq("external_id", election.external_id).maybeSingle();
+        if (lookup.error) throw new Error("election lookup failed: " + lookup.error.message);
+        if (!lookup.data?.id) continue;
         const resultLinks = await crawlElection(election.source_url);
-
-        const rows = resultLinks.map(url => ({
-          election_id: savedElection.id,
-          source_url: url,
-          source_external_id: url,
-          status: "discovered",
-          evidence_status: "remote_only",
-          storage_policy: "ephemeral",
-        }));
-
+        const rows = resultLinks.map(url => ({ election_id: lookup.data.id, source_url: url, source_external_id: url, status: "discovered", evidence_status: "remote_only", storage_policy: "ephemeral" }));
         if (rows.length) {
-          const { error } = await supabase
-            .from("result_sheets")
-            .upsert(rows, {
-              onConflict: "election_id,source_url",
-              ignoreDuplicates: true,
-            });
-          if (!error) resultSheetsDiscovered += rows.length;
+          const result = await supabase.from("result_sheets").upsert(rows, { onConflict: "election_id,source_url", ignoreDuplicates: true });
+          if (result.error) throw new Error("result_sheets upsert failed: " + result.error.message);
+          resultSheetsDiscovered += rows.length;
         }
-
-        electionStats.push({
-          external_id: election.external_id,
-          pages_scanned: "bounded",
-          result_links: resultLinks.length,
-        });
+        electionStats.push({ external_id: election.external_id, result_links: resultLinks.length });
       } catch (error) {
-        electionStats.push({
-          external_id: election.external_id,
-          error: error instanceof Error ? error.message : String(error),
-        });
+        electionStats.push({ external_id: election.external_id, error: error instanceof Error ? error.message : String(error) });
       }
     }
 
-    await supabase.from("pipeline_runs").insert({
-      started_at: startedAt,
-      finished_at: new Date().toISOString(),
-      status: "completed",
-      trigger_source: "server",
-      discovered: elections.length,
-      metadata: {
-        source: "IReV",
-        mode: "server-side-bounded-crawl",
-        result_sheets_discovered: resultSheetsDiscovered,
-        elections: electionStats,
-        homepage: homepageDiagnostics,
-        scanned_directory_pages: scannedDirectoryPages,
-        api_discovery_attempts: apiDiscovery.attempts,
-      },
-    });
+    const pipeline = await supabase.from("pipeline_runs").insert({ started_at: startedAt, finished_at: new Date().toISOString(), status: "completed", trigger_source: "server", discovered: elections.length, metadata: { source: "IReV", mode: "server-side-bounded-crawl", result_sheets_discovered: resultSheetsDiscovered, elections: electionStats, homepage: homepageDiagnostics, scanned_directory_pages: scannedDirectoryPages, api_discovery_attempts: apiDiscovery.attempts } });
+    if (pipeline.error) throw new Error("pipeline_runs insert failed: " + pipeline.error.message);
 
-    return new Response(JSON.stringify({
-      ok: true,
-      discovered: elections.length,
-      result_sheets_discovered: resultSheetsDiscovered,
-      elections: electionStats,
-      diagnostics: {
-        homepage: homepageDiagnostics,
-        scanned_directory_pages: scannedDirectoryPages,
-        api_discovery_attempts: apiDiscovery.attempts,
-      },
-    }), {
-      headers: { "content-type": "application/json" },
-    });
+    return new Response(JSON.stringify({ ok: true, discovered: elections.length, result_sheets_discovered: resultSheetsDiscovered, elections: electionStats, diagnostics: { homepage: homepageDiagnostics, scanned_directory_pages: scannedDirectoryPages, api_discovery_attempts: apiDiscovery.attempts } }), { headers: { "content-type": "application/json" } });
   } catch (error) {
-    await supabase.from("pipeline_runs").insert({
-      started_at: startedAt,
-      finished_at: new Date().toISOString(),
-      status: "failed",
-      trigger_source: "server",
-      failed: 1,
-      issues: [{ message: error instanceof Error ? error.message : String(error) }],
-      metadata: { source: "IReV" },
-    });
-
-    return new Response(JSON.stringify({
-      ok: false,
-      error: error instanceof Error ? error.message : String(error),
-    }), {
-      status: 500,
-      headers: { "content-type": "application/json" },
-    });
+    const message = error instanceof Error ? error.message : String(error);
+    try { await supabase.from("pipeline_runs").insert({ started_at: startedAt, finished_at: new Date().toISOString(), status: "failed", trigger_source: "server", failed: 1, issues: [{ message }], metadata: { source: "IReV" } }); } catch {}
+    return new Response(JSON.stringify({ ok: false, error: message }), { status: 500, headers: { "content-type": "application/json" } });
   }
 });
