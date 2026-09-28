@@ -81,8 +81,8 @@ Deno.serve(async request => {
     };
   });
 
-  for (let i = 0; i < puRows.length; i += 500) {
-    const { error } = await supabase.from("polling_units").upsert(puRows.slice(i, i + 500), { onConflict: "ward_id,pu_code" });
+  for (let i = 0; i < puRows.length; i += 5000) {
+    const { error } = await supabase.from("polling_units").upsert(puRows.slice(i, i + 5000), { onConflict: "ward_id,pu_code" });
     if (error) throw error;
   }
 
