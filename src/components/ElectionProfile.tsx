@@ -1,4 +1,4 @@
-import { CalendarDays, CheckCircle2, ExternalLink, FileImage, MapPin, RefreshCw, Search, ShieldCheck, Users, XCircle } from "lucide-react";
+import { ArrowUpRight, CalendarDays, CheckCircle2, ExternalLink, FileImage, MapPin, RefreshCw, Search, ShieldCheck, Users, XCircle } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { supabase } from "../lib/supabase";
 
@@ -12,6 +12,7 @@ interface EmptyStateProps { label: string; }
 
 const IREV = "https://inecelectionresults.ng/";
 const GUIDANCE = "https://inecnigeria.org/voters/education";
+const yearOf = (value?: string | null): string => value ? new Date(value).getFullYear().toString() : "Year unavailable";
 const fmt = (value?: string | null): string => value ? new Intl.DateTimeFormat("en-NG", { dateStyle: "medium" }).format(new Date(value)) : "Not published";
 const num = (value?: number | null): string => value == null ? "—" : new Intl.NumberFormat("en-NG").format(value);
 const pct = (expected?: number | null, uploaded?: number | null): number => expected && uploaded != null ? Math.min(100, Math.round(uploaded / expected * 1000) / 10) : 0;
@@ -58,7 +59,7 @@ export function ElectionProfile(_props: ElectionProfileProps) {
     });
   }, [selected]);
 
-  const filtered = useMemo(() => rows.filter((row) => row.name.toLowerCase().includes(q.toLowerCase())), [rows, q]);
+  const filtered = useMemo(() => rows.filter((row) => `${yearOf(row.election_date)} ${row.election_type} ${row.name}`.toLowerCase().includes(q.toLowerCase())), [rows, q]);
   const election = rows.find((row) => row.id === selected);
   const tabs: Array<{ id: Tab; label: string }> = [
     { id: "overview", label: "Overview" }, { id: "candidates", label: "Candidates" }, { id: "timeline", label: "Timeline" },
@@ -66,25 +67,43 @@ export function ElectionProfile(_props: ElectionProfileProps) {
   ];
 
   return <section>
-    <div className="grid gap-5 lg:grid-cols-[19rem_minmax(0,1fr)]">
-      <aside className="h-fit overflow-hidden rounded-2xl border border-zinc-800/60 bg-zinc-900/40">
-        <div className="border-b border-zinc-800/60 p-4">
-          <div className="mb-3 flex items-center justify-between"><div><p className="text-sm font-semibold text-zinc-200">Elections</p><p className="text-xs text-zinc-600">{rows.length} synchronized</p></div><button onClick={() => void load()} aria-label="Refresh elections" className="rounded-lg p-2 text-zinc-500 transition-all duration-200 hover:bg-zinc-800 hover:text-zinc-200"><RefreshCw size={15} /></button></div>
-          <label className="flex items-center gap-2 rounded-xl border border-zinc-800/60 bg-zinc-950/60 px-3 py-2.5 text-zinc-500 focus-within:border-zinc-700"><Search size={14} /><input value={q} onChange={(event) => setQ(event.target.value)} placeholder="Search elections…" className="min-w-0 flex-1 bg-transparent text-xs text-zinc-200 outline-none placeholder:text-zinc-700" /></label>
+    <div>
+      <div className="mb-5 rounded-2xl border border-zinc-800/60 bg-zinc-900/35 p-4 sm:p-5">
+        <div className="flex flex-col gap-4 xl:flex-row xl:items-center xl:justify-between">
+          <div className="flex min-w-0 items-center gap-3">
+            <div className="grid size-9 shrink-0 place-items-center rounded-xl bg-zinc-800/70 text-zinc-400"><CalendarDays size={16} /></div>
+            <div className="min-w-0">
+              <p className="text-[10px] font-semibold uppercase tracking-[0.18em] text-zinc-600">Election index</p>
+              <p className="mt-1 text-[13px] font-medium text-zinc-300">Choose a year and category to inspect its evidence.</p>
+            </div>
+          </div>
+          <div className="flex w-full gap-2 xl:w-auto">
+            <label className="flex min-w-0 flex-1 items-center gap-2 rounded-xl border border-zinc-800/60 bg-zinc-950/55 px-3 py-2.5 text-zinc-500 focus-within:border-zinc-700 xl:w-64">
+              <Search size={14} /><input value={q} onChange={(event) => setQ(event.target.value)} placeholder="Search elections" className="min-w-0 flex-1 bg-transparent text-[12px] text-zinc-200 outline-none placeholder:text-zinc-700" />
+            </label>
+            <button onClick={() => void load()} aria-label="Refresh elections" className="rounded-xl border border-zinc-800/60 bg-zinc-950/40 p-2.5 text-zinc-500 transition-all duration-200 hover:bg-zinc-900 hover:text-zinc-200"><RefreshCw size={15} /></button>
+          </div>
         </div>
-        <div className="max-h-[28rem] overflow-y-auto p-2">
-          {loading ? <div className="space-y-2 p-2">{[1,2,3].map((item) => <div key={item} className="h-16 animate-pulse rounded-xl bg-zinc-800/40" />)}</div> : filtered.length ? filtered.map((row) => <button key={row.id} onClick={() => { setSelected(row.id); setTab("overview"); }} className={`w-full rounded-xl p-3 text-left transition-all duration-200 ease-in-out hover:translate-y-[-1px] ${row.id === selected ? "bg-zinc-800/80 text-zinc-100" : "text-zinc-400 hover:bg-zinc-900 hover:text-zinc-200"}`}><p className="line-clamp-2 text-xs font-medium">{row.name}</p><p className="mt-1 text-[11px] text-zinc-600">{row.election_type} · {fmt(row.election_date)}</p></button>) : <div className="p-5 text-center text-xs text-zinc-600">No synchronized elections found.</div>}
+        <div className="mt-4 flex gap-2 overflow-x-auto pb-1">
+          {loading ? [1,2,3].map((item) => <div key={item} className="h-10 min-w-32 animate-pulse rounded-xl bg-zinc-800/40" />) : filtered.length ? filtered.map((row) => {
+            const selectedRow = row.id === selected;
+            return <button key={row.id} onClick={() => { setSelected(row.id); setTab("overview"); }} className={`group inline-flex shrink-0 items-center gap-2.5 rounded-xl border px-3 py-2 text-left transition-all duration-200 ease-in-out hover:translate-y-[-1px] ${selectedRow ? "border-zinc-700/80 bg-zinc-100 text-zinc-950" : "border-zinc-800/60 bg-zinc-950/35 text-zinc-400 hover:border-zinc-700 hover:bg-zinc-900 hover:text-zinc-200"}`}>
+              <span className="font-display text-sm font-semibold tracking-tight">{yearOf(row.election_date)}</span>
+              <span className={`max-w-36 truncate text-[11px] font-medium ${selectedRow ? "text-zinc-600" : "text-zinc-600 group-hover:text-zinc-400"}`}>{row.election_type}</span>
+              <ArrowUpRight size={13} className={selectedRow ? "text-zinc-500" : "text-zinc-700 group-hover:text-zinc-400"} />
+            </button>;
+          }) : <p className="px-1 py-3 text-xs text-zinc-600">No matching elections.</p>}
         </div>
-      </aside>
+      </div>
 
       <div className="min-w-0">
         {error && <div className="mb-5 flex items-start gap-3 rounded-2xl border border-amber-500/20 bg-amber-500/5 p-4 text-sm text-amber-200"><XCircle size={18} className="mt-0.5 shrink-0" /><div><p className="font-medium">Data connection notice</p><p className="mt-1 text-xs text-amber-200/60">{error}</p></div></div>}
         {election ? <>
-          <div className="rounded-2xl border border-zinc-800/60 bg-zinc-900/40 p-5 sm:p-6">
+          <div className="rounded-2xl border border-zinc-800/60 bg-zinc-900/35 p-5 sm:p-6">
             <div className="flex flex-col justify-between gap-5 sm:flex-row sm:items-start">
               <div>
                 <div className="mb-3 flex flex-wrap items-center gap-2"><span className="rounded-full border border-emerald-500/20 bg-emerald-500/5 px-2.5 py-1 text-[10px] font-medium uppercase tracking-wider text-emerald-300">{election.status || "scheduled"}</span><span className="rounded-full border border-zinc-800/60 px-2.5 py-1 text-[10px] text-zinc-500">{election.election_type}</span></div>
-                <h2 className="max-w-3xl font-display text-2xl font-semibold tracking-tight text-zinc-50 sm:text-3xl">{election.name}</h2>
+                <h2 className="max-w-3xl font-display text-[1.65rem] font-semibold leading-tight tracking-[-0.025em] text-zinc-50 sm:text-2xl">{election.name}</h2>
                 <div className="mt-3 flex flex-wrap gap-4 text-xs text-zinc-500"><span className="inline-flex items-center gap-1.5"><CalendarDays size={14} />{fmt(election.election_date)}</span><span className="inline-flex items-center gap-1.5"><MapPin size={14} />Nigeria</span></div>
               </div>
               <a href={election.source_url ?? IREV} target="_blank" rel="noreferrer" className="inline-flex shrink-0 items-center gap-2 rounded-xl border border-zinc-800/60 bg-zinc-950/50 px-3.5 py-2.5 text-xs font-medium text-zinc-300 transition-all duration-200 hover:translate-y-[-1px] hover:bg-zinc-800">Open source <ExternalLink size={14} /></a>
