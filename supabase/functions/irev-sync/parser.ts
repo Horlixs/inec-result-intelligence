@@ -68,9 +68,9 @@ export function discoverFromHtml(html: string, origin = "https://inecelectionres
   }
 
   // Some IReV pages expose routes inside serialized state/scripts rather than
-  // ordinary anchor tags. Capture those routes as a second, anchor-independent
-  // discovery path.
-  const routePattern = /(?:https?:\\/\\/inecelectionresults\\.ng)?(\\/elections\\/[A-Za-z0-9_-]+(?:[?][^"'\\s<>\\\\]*)?)/gi;
+  // ordinary anchor tags. Capture direct election routes without over-escaping
+  // the regular expression so the Edge Runtime parser can compile it.
+  const routePattern = /(?:https?:\/\/inecelectionresults\.ng)?(\/elections\/[A-Za-z0-9_-]+(?:[?][^"'\s<>\\]*)?)/gi;
   for (const match of html.matchAll(routePattern)) {
     const election = electionFromLink(match[1], "", origin);
     if (election && !found.has(election.external_id)) found.set(election.external_id, election);
@@ -88,7 +88,7 @@ export function extractSameOriginLinks(html: string, origin = "https://inecelect
       const url = new URL(match[1], origin);
       if (url.origin === origin && url.protocol === "https:") links.add(url.toString());
     } catch {
-      // ignore malformed URLs
+      // ignore malformed links
     }
   }
 
