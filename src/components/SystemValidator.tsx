@@ -1,7 +1,8 @@
 import { CheckCircle2, Loader2, ShieldCheck, XCircle } from "lucide-react";
 import { useState } from "react";
 import { supabase } from "../lib/supabase";
-import { ExtractedResult, validateExtractedResult } from "../lib/irev";
+import { validateExtractedResult } from "../lib/irev";
+import type { ExtractedResult } from "../lib/irev";
 
 interface SystemValidatorProps {}
 interface ValidationResult { checked: number; passed: number; failed: number; issues: string[]; }
