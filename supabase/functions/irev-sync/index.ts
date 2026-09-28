@@ -1,5 +1,5 @@
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
-import { discoverFromHtml, extractSameOriginLinks } from "./parser.ts";
+import { classifyElection, discoverFromHtml, extractSameOriginLinks } from "./parser.ts";
 
 const supabase = createClient(
   Deno.env.get("SUPABASE_URL")!,
