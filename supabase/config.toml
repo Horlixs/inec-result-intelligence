@@ -5,7 +5,7 @@ verify_jwt = true
 verify_jwt = true
 
 [functions.irev-sync]
-verify_jwt = true
+verify_jwt = false
 
 [functions.irev-process]
-verify_jwt = true
+verify_jwt = false
