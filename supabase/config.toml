@@ -1,0 +1,11 @@
+[functions.irev-cron]
+verify_jwt = true
+
+[functions.irev-refresh]
+verify_jwt = true
+
+[functions.irev-sync]
+verify_jwt = true
+
+[functions.irev-process]
+verify_jwt = true
