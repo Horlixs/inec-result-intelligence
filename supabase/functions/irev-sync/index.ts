@@ -8,7 +8,10 @@ const supabase = createClient(
 
 const ORIGIN = "https://inecelectionresults.ng";
 const UA = "INEC-Result-Intelligence/1.0 source-collector";
-const API_BASES = ["https://dolphin-app-sleqh.ondigitalocean.app/api/v1","https://lv001-r.inecelectionresults.ng/api/v1"];
+const API_BASES = [
+  "https://dolphin-app-sleqh.ondigitalocean.app/api/v1",
+  "https://lv001-g.inecelectionresults.ng/api/v1",
+];
 const PUBLIC_INEC_CLIENT_KEY = "4SXkHM7Amb1SbF4C8do6816dmbbwqPp7akRbrmcV";
 
 function extractLinks(html: string, pageUrl: string): string[] {
@@ -67,7 +70,7 @@ const KNOWN_ELECTION_TYPE_IDS = [
 // election type. The public SPA scopes that request by state_id. INEC's
 // state_id sequence is stable: Abia=1 ... FCT=15 ... Zamfara=37.
 const KNOWN_STATE_IDS = Array.from({ length: 37 }, (_, index) => index + 1);
-const ELECTION_DISCOVERY_CONCURRENCY = 8;
+const ELECTION_DISCOVERY_CONCURRENCY = 20;
 
 async function discoverElectionTypeIds(base: string, attempts: Array<Record<string, unknown>>): Promise<string[]> {
   const url = base + "/election-types";
@@ -117,6 +120,7 @@ async function discoverFromIrevApi() {
 
   const recordRows = (rows: unknown) => {
     if (!Array.isArray(rows)) return;
+
     for (const row of rows as Array<Record<string, unknown>>) {
       const id = String(row._id ?? row.id ?? row.election_id ?? "").trim();
       if (!id) continue;
@@ -128,13 +132,6 @@ async function discoverFromIrevApi() {
       const electionDate =
         String(row.election_date ?? row.date ?? "").trim() || null;
 
-      const stateId =
-        row.state_id === undefined || row.state_id === null
-          ? null
-          : String(row.state_id);
-
-      // Keep the IReV election id as the primary identity. State-scoped
-      // requests can return the same election more than once.
       found.set("irev:" + id, {
         external_id: "irev:" + id,
         name,
@@ -143,31 +140,24 @@ async function discoverFromIrevApi() {
         source_url: ORIGIN + "/elections/" + id,
         status: "discovered",
       });
-
-      // Some API records have an unhelpful name but do expose election_type_id.
-      // Preserve a useful classifier without changing the stored identity.
-      if (stateId && !name.toLowerCase().includes("state")) {
-        // Intentionally no state-specific mutation: the election record itself
-        // remains the source of truth.
-      }
     }
   };
 
   const requestElectionList = async (
     base: string,
     electionTypeId: string,
-    stateId: number | null,
+    stateId: number,
   ): Promise<boolean> => {
     const params = new URLSearchParams({
       election_type: electionTypeId,
+      state_id: String(stateId),
     });
-    if (stateId !== null) params.set("state_id", String(stateId));
-
     const url = base + "/elections?" + params.toString();
 
     try {
       const controller = new AbortController();
-      const timeout = setTimeout(() => controller.abort(), stateId === null ? 7000 : 5000);
+      const timeout = setTimeout(() => controller.abort(), 4000);
+
       const response = await fetch(url, {
         method: "GET",
         signal: controller.signal,
@@ -180,6 +170,7 @@ async function discoverFromIrevApi() {
           "x-api-rt": String(Date.now()),
         },
       });
+
       clearTimeout(timeout);
 
       const body = await response.text();
@@ -226,33 +217,35 @@ async function discoverFromIrevApi() {
     }
   };
 
-  // First try the compact request the API historically supported. If it
-  // times out, do not abandon discovery: fall back to the state-scoped form
-  // used by the official IReV SPA.
   for (const base of API_BASES) {
     const electionTypeIds = await discoverElectionTypeIds(base, attempts);
 
+    // The official IReV SPA scopes election discovery by state_id. The
+    // unscoped /elections?election_type=... request is prone to 504s because
+    // it asks the upstream for an unnecessarily large dataset.
+    const jobs: Array<{ electionTypeId: string; stateId: number }> = [];
     for (const electionTypeId of electionTypeIds) {
-      const broadSucceeded = await requestElectionList(base, electionTypeId, null);
-
-      if (!broadSucceeded) {
-        // The state-scoped form avoids the 504s caused by the unscoped query.
-        // Run a bounded number of requests concurrently so a slow INEC backend
-        // does not serialize the entire discovery pass.
-        for (let offset = 0; offset < KNOWN_STATE_IDS.length; offset += ELECTION_DISCOVERY_CONCURRENCY) {
-          const batch = KNOWN_STATE_IDS.slice(
-            offset,
-            offset + ELECTION_DISCOVERY_CONCURRENCY,
-          );
-
-          await Promise.all(
-            batch.map((stateId) =>
-              requestElectionList(base, electionTypeId, stateId)
-            ),
-          );
-        }
+      for (const stateId of KNOWN_STATE_IDS) {
+        jobs.push({ electionTypeId, stateId });
       }
     }
+
+    for (let offset = 0; offset < jobs.length; offset += ELECTION_DISCOVERY_CONCURRENCY) {
+      const batch = jobs.slice(
+        offset,
+        offset + ELECTION_DISCOVERY_CONCURRENCY,
+      );
+
+      await Promise.all(
+        batch.map(({ electionTypeId, stateId }) =>
+          requestElectionList(base, electionTypeId, stateId)
+        ),
+      );
+    }
+
+    // Once one API host has produced election records, do not spend another
+    // full 259-request pass against a legacy/sibling host.
+    if (found.size > 0) break;
   }
 
   return { elections: [...found.values()], attempts };
