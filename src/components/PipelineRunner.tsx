@@ -14,8 +14,9 @@ export function PipelineRunner() {
 
     try {
       if (!supabase) throw new Error("Supabase is not configured.");
+      const client = supabase;
 
-      const { data, error: invokeError } = await supabase.functions.invoke("irev-sync", {
+      const { data, error: invokeError } = await client.functions.invoke("irev-sync", {
         body: { mode: "discover" },
       });
       if (invokeError) throw invokeError;
@@ -44,7 +45,7 @@ export function PipelineRunner() {
         const batch = ids.slice(i, i + concurrency);
         const results = await Promise.all(
           batch.map(async (id) => {
-            const result = await supabase.functions.invoke("irev-process", {
+            const result = await client.functions.invoke("irev-process", {
               body: { result_sheet_id: id },
             });
             return result.error || !result.data?.ok ? false : true;
