@@ -92,6 +92,7 @@ export function ElectionProfile(_props: ElectionProfileProps) {
   const [geoLoading, setGeoLoading] = useState(false);
   const [error, setError] = useState("");
   const [geoElectionIds, setGeoElectionIds] = useState<string[] | null>(null);
+  const [geoReady, setGeoReady] = useState(false);
 
   async function load(): Promise<void> {
     setLoading(true); setError("");
@@ -158,36 +159,37 @@ export function ElectionProfile(_props: ElectionProfileProps) {
     const matchesYear = !year || yearOf(row.election_date) === year;
     const matchesCategory = !category || categoryOf(row.election_type) === category;
     const matchesType = !type || row.election_type === type;
-    const matchesGeo = !stateId || geoElectionIds === null || geoElectionIds.includes(row.id);
+    const matchesGeo = !stateId || (!geoReady ? true : geoElectionIds?.includes(row.id) === true);
     const query = q.trim().toLowerCase();
     const matchesSearch = !query || row.name.toLowerCase().includes(query) || humanElectionType(row.election_type).toLowerCase().includes(query);
     return matchesYear && matchesCategory && matchesType && matchesGeo && matchesSearch;
   }), [rows, year, category, type, stateId, geoElectionIds, q]);
 
   useEffect(() => {
-    if (!supabase || !year || !category || !type || !stateId) {
+    if (!supabase || !year || !type || !stateId) {
       setGeoElectionIds(null);
+      setGeoReady(false);
       return;
     }
     const electionIds = rows.filter((row) => yearOf(row.election_date) === year && categoryOf(row.election_type) === category && row.election_type === type).map((row) => row.id);
     if (!electionIds.length) { setGeoElectionIds([]); return; }
     setGeoLoading(true);
+    setGeoReady(false);
     setError("");
-    let query = supabase
-      .from("result_sheets")
-      .select("election_id,polling_unit_id,polling_units!inner(ward_id,wards!inner(lga_id,lgas!inner(state_id)))")
-      .in("election_id", electionIds);
-    if (pollingUnitId) query = query.eq("polling_unit_id", pollingUnitId);
-    else if (wardId) query = query.eq("polling_units.wards.id", wardId);
-    else if (lgaId) query = query.eq("polling_units.wards.lgas.id", lgaId);
-    else query = query.eq("polling_units.wards.lgas.state_id", stateId);
-    void query.then((response) => {
+    void supabase.rpc("election_ids_for_geography", {
+      election_ids: electionIds,
+      p_state_id: stateId,
+      p_lga_id: lgaId || null,
+      p_ward_id: wardId || null,
+      p_polling_unit_id: pollingUnitId || null,
+    }).then((response) => {
       if (response.error) {
         setGeoElectionIds([]);
-        setError("The selected geography could not be matched to election evidence yet.");
+        setError("The selected geographic scope could not be matched to the available result records.");
       } else {
-        setGeoElectionIds([...new Set((response.data ?? []).map((row) => row.election_id as string))]);
+        setGeoElectionIds([...new Set((response.data ?? []).map((row) => String(row)))]);
       }
+      setGeoReady(true);
       setGeoLoading(false);
     });
   }, [year, category, type, stateId, lgaId, wardId, pollingUnitId, rows]);
@@ -241,10 +243,10 @@ export function ElectionProfile(_props: ElectionProfileProps) {
           {geoLoading && <RefreshCw size={14} className="animate-spin text-zinc-600" />}
         </div>
         <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
-          <SelectBox label="4 · State" value={stateId} placeholder="Select a state" options={states.map((item) => ({ value: item.id, label: item.name }))} onChange={(value) => { setStateId(value); setLgaId(""); setWardId(""); setPollingUnitId(""); setSelected(""); setGeoElectionIds(null); }} disabled={!type} />
-          <SelectBox label="5 · Local Government Area" value={lgaId} placeholder="Select a local government area" options={lgas.map((item) => ({ value: item.id, label: item.name }))} onChange={(value) => { setLgaId(value); setWardId(""); setPollingUnitId(""); setSelected(""); }} disabled={!stateId} />
-          <SelectBox label="6 · Ward" value={wardId} placeholder="Select a ward" options={wards.map((item) => ({ value: item.id, label: item.name }))} onChange={(value) => { setWardId(value); setPollingUnitId(""); setSelected(""); }} disabled={!lgaId} />
-          <SelectBox label="7 · Polling Unit" value={pollingUnitId} placeholder="Select a polling unit" options={pollingUnits.map((item) => ({ value: item.id, label: item.pu_code ? `${item.name} · ${item.pu_code}` : item.name }))} onChange={(value) => { setPollingUnitId(value); setSelected(""); }} disabled={!wardId} />
+          <SelectBox label="4 · State" value={stateId} placeholder="All states" options={[{ value: "", label: "All states" }, ...states.map((item) => ({ value: item.id, label: item.name }))]} onChange={(value) => { setStateId(value); setLgaId(""); setWardId(""); setPollingUnitId(""); setSelected(""); setGeoElectionIds(null); }} disabled={!type} />
+          <SelectBox label="5 · Local Government Area" value={lgaId} placeholder="All local government areas" options={[{ value: "", label: "All local government areas" }, ...lgas.map((item) => ({ value: item.id, label: item.name }))]} onChange={(value) => { setLgaId(value); setWardId(""); setPollingUnitId(""); setGeoElectionIds(null); setGeoReady(false); setSelected(""); }} disabled={!stateId} />
+          <SelectBox label="6 · Ward" value={wardId} placeholder="All wards" options={[{ value: "", label: "All wards" }, ...wards.map((item) => ({ value: item.id, label: item.name }))]} onChange={(value) => { setWardId(value); setPollingUnitId(""); setGeoElectionIds(null); setGeoReady(false); setSelected(""); }} disabled={!lgaId} />
+          <SelectBox label="7 · Polling Unit" value={pollingUnitId} placeholder="All polling units" options={[{ value: "", label: "All polling units" }, ...pollingUnits.map((item) => ({ value: item.id, label: item.pu_code ? item.name + " · " + item.pu_code : item.name }))]} onChange={(value) => { setPollingUnitId(value); setSelected(""); }} disabled={!wardId} />
         </div>
         {(selectedState || selectedLga || selectedWard || selectedPu) && <div className="mt-4 flex flex-wrap items-center gap-1.5 text-[11px]">
           <button onClick={() => resetFrom("state")} className="text-zinc-500 hover:text-zinc-200">Nigeria</button>
