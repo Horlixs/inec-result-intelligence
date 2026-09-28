@@ -5,8 +5,6 @@ const supabase = createClient(
   Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!,
 );
 
-const bucket = "result-evidence";
-const storagePolicy = "ephemeral";
 const geminiKey = Deno.env.get("GOOGLE_GENERATIVE_AI_API_KEY");
 
 function sha256(bytes: Uint8Array): Promise<string> {
@@ -94,14 +92,9 @@ Deno.serve(async request => {
 
     const mime = normaliseMime(source.headers.get("content-type"));
     const hash = await sha256(bytes);
-    storagePath = `${sheet.election_id}/${hash}/${safeName(sheet.source_url)}`;
-
-    const upload = await supabase.storage.from(bucket).upload(storagePath, bytes, { contentType: mime, upsert: false });
-    if (upload.error && !/already exists/i.test(upload.error.message)) throw upload.error;
-
     await supabase.from("result_sheets").update({
       source_hash: hash,
-      storage_path: storagePath,
+      storage_path: null,
       mime_type: mime,
       captured_at: new Date().toISOString(),
     }).eq("id", id);
@@ -143,22 +136,19 @@ Deno.serve(async request => {
     ];
     await supabase.from("validation_checks").insert(checks.map(x => ({ ...x, extraction_id: extraction.id })));
 
-    const keepEvidence = storagePolicy === "durable" || extractionStatus === "pending_review";
-    if (!keepEvidence) {
-      const removal = await supabase.storage.from(bucket).remove([storagePath]);
-      if (removal.error) throw removal.error;
-      storagePath = null;
-    }
+    // Remote-only evidence policy: keep the canonical source URL and hash,
+    // but never persist the downloaded document bytes in Supabase Storage.
+    const keepRemoteSource = true;
 
     await supabase.from("result_sheets").update({
       status: extractionStatus,
-      evidence_status: keepEvidence ? "stored" : "deleted_after_extraction",
-      storage_path: storagePath,
+      evidence_status: "remote_only",
+      storage_path: null,
       processed_at: new Date().toISOString(),
       last_error: null,
     }).eq("id", id);
 
-    return new Response(JSON.stringify({ ok: true, result_sheet_id: id, extraction_id: extraction.id, status: extractionStatus, evidence_retained: keepEvidence, source_hash: hash }), { headers: { "content-type": "application/json" } });
+    return new Response(JSON.stringify({ ok: true, result_sheet_id: id, extraction_id: extraction.id, status: extractionStatus, evidence_retained: keepRemoteSource, source_hash: hash }), { headers: { "content-type": "application/json" } });
   } catch (error) {
     await supabase.from("result_sheets").update({
       status: "pending_review",
@@ -167,6 +157,6 @@ Deno.serve(async request => {
       last_error: error instanceof Error ? error.message : String(error),
     }).eq("id", id);
 
-    return new Response(JSON.stringify({ ok: false, result_sheet_id: id, error: error instanceof Error ? error.message : String(error), evidence_retained: Boolean(storagePath) }), { status: 500, headers: { "content-type": "application/json" } });
+    return new Response(JSON.stringify({ ok: false, result_sheet_id: id, error: error instanceof Error ? error.message : String(error), evidence_retained: false }), { status: 500, headers: { "content-type": "application/json" } });
   }
 });
