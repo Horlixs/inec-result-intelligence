@@ -53,13 +53,68 @@ function isCrawlablePage(url: string): boolean {
   }
 }
 
+const KNOWN_ELECTION_TYPE_IDS = [
+  "5f129a04df41d910dcdc1d50",
+  "5f129a04df41d910dcdc1d51",
+  "5f129a04df41d910dcdc1d52",
+  "5f129a04df41d910dcdc1d53",
+  "5f129a04df41d910dcdc1d54",
+  "5f129a04df41d910dcdc1d55",
+  "5f129a04df41d910dcdc1d56",
+];
+
+async function discoverElectionTypeIds(base: string, attempts: Array<Record<string, unknown>>): Promise<string[]> {
+  const url = base + "/election-types";
+  try {
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 10000);
+    const response = await fetch(url, {
+      method: "GET", signal: controller.signal,
+      headers: {
+        "user-agent": UA, accept: "application/json, text/plain, */*",
+        origin: ORIGIN, referer: ORIGIN + "/", "x-api-key": PUBLIC_INEC_CLIENT_KEY,
+        "x-api-rt": String(Date.now()),
+      },
+    });
+    clearTimeout(timeout);
+    const body = await response.text();
+    attempts.push({
+      base,
+      endpoint: "election-types",
+      status: response.status,
+      content_type: response.headers.get("content-type"),
+      length: body.length,
+      preview: body.slice(0, 240),
+    });
+    if (!response.ok || !body) return KNOWN_ELECTION_TYPE_IDS;
+    const payload: unknown = JSON.parse(body);
+    const rows = Array.isArray(payload) ? payload :
+      payload && typeof payload === "object" && Array.isArray((payload as Record<string, unknown>).data)
+        ? (payload as Record<string, unknown>).data : [];
+    const ids = (rows as Array<Record<string, unknown>>)
+      .map((row) => String(row._id ?? row.id ?? row.election_type_id ?? "").trim())
+      .filter((id) => /^[a-f0-9]{24}$/i.test(id));
+    return [...new Set(ids)].length ? [...new Set(ids)] : KNOWN_ELECTION_TYPE_IDS;
+  } catch (error) {
+    attempts.push({
+      base,
+      endpoint: "election-types",
+      error: error instanceof Error ? error.message : String(error),
+    });
+    return KNOWN_ELECTION_TYPE_IDS;
+  }
+}
+
 async function discoverFromIrevApi() {
   const found = new Map<string, ReturnType<typeof discoverFromHtml>[number]>();
   const attempts: Array<Record<string, unknown>> = [];
 
+  // Discover the actual Mongo-style election-type IDs used by IReV.
+  // Integer values such as 1..10 are not accepted by the API.
   for (const base of API_BASES) {
-    for (let electionType = 1; electionType <= 10; electionType++) {
-      const url = base + "/elections?election_type=" + electionType;
+    const electionTypeIds = await discoverElectionTypeIds(base, attempts);
+    for (const electionTypeId of electionTypeIds) {
+      const url = base + "/elections?election_type=" + encodeURIComponent(electionTypeId);
       try {
         const controller = new AbortController();
         const timeout = setTimeout(() => controller.abort(), 12000);
@@ -73,9 +128,14 @@ async function discoverFromIrevApi() {
         });
         clearTimeout(timeout);
         const body = await response.text();
-        attempts.push({ base, election_type: electionType, status: response.status,
-          content_type: response.headers.get("content-type"), length: body.length,
-          preview: body.slice(0, 160) });
+        attempts.push({
+          base,
+          election_type: electionTypeId,
+          status: response.status,
+          content_type: response.headers.get("content-type"),
+          length: body.length,
+          preview: body.slice(0, 160),
+        });
         if (!response.ok || !body) continue;
         let payload: unknown;
         try { payload = JSON.parse(body); } catch { continue; }
@@ -86,13 +146,22 @@ async function discoverFromIrevApi() {
           const id = String(row._id ?? row.id ?? row.election_id ?? "").trim();
           if (!id) continue;
           const name = String(row.name ?? row.title ?? row.election_name ?? id).trim();
-          found.set("irev:" + id, { external_id: "irev:" + id, name,
-            election_type: classifyElection(name), election_date: null,
-            source_url: ORIGIN + "/elections/" + id, status: "discovered" });
+          const electionDate = String(row.election_date ?? row.date ?? "").trim() || null;
+          found.set("irev:" + id, {
+            external_id: "irev:" + id,
+            name,
+            election_type: classifyElection(name),
+            election_date: electionDate,
+            source_url: ORIGIN + "/elections/" + id,
+            status: "discovered",
+          });
         }
       } catch (error) {
-        attempts.push({ base, election_type: electionType,
-          error: error instanceof Error ? error.message : String(error) });
+        attempts.push({
+          base,
+          election_type: electionTypeId,
+          error: error instanceof Error ? error.message : String(error),
+        });
       }
     }
   }
