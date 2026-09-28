@@ -9,7 +9,7 @@ export function PipelineRunner() {
 
   async function run() {
     setRunning(true);
-    setMessage("Starting server-side IReV collector…");
+    setMessage("Discovering elections and result sheets…");
     setError(false);
 
     try {
@@ -18,13 +18,49 @@ export function PipelineRunner() {
       const { data, error: invokeError } = await supabase.functions.invoke("irev-sync", {
         body: { mode: "discover" },
       });
-
       if (invokeError) throw invokeError;
       if (!data?.ok) throw new Error(data?.error || "The collector did not complete.");
 
+      const { data: sheets, error: sheetError } = await supabase
+        .from("result_sheets")
+        .select("id")
+        .eq("status", "discovered")
+        .order("discovered_at", { ascending: true });
+
+      if (sheetError) throw sheetError;
+
+      const ids = (sheets ?? []).map((row) => row.id);
+      if (!ids.length) {
+        setMessage(`Discovery complete — ${data.discovered ?? 0} elections found. No new result-sheet source links were available for processing.`);
+        return;
+      }
+
+      let completed = 0;
+      let failed = 0;
+      const concurrency = 3;
+
+      setMessage(`Processing ${ids.length} result sheets — download → hash → OCR → validate → cleanup…`);
+
+      for (let i = 0; i < ids.length; i += concurrency) {
+        const batch = ids.slice(i, i + concurrency);
+        const results = await Promise.all(
+          batch.map(async (id) => {
+            const result = await supabase.functions.invoke("irev-process", {
+              body: { result_sheet_id: id },
+            });
+            return result.error || !result.data?.ok ? false : true;
+          }),
+        );
+
+        completed += results.filter(Boolean).length;
+        failed += results.filter((value) => !value).length;
+        setMessage(`Processing result sheets… ${completed}/${ids.length} completed, ${failed} failed.`);
+      }
+
       setMessage(
-        `Done — ${data.discovered ?? 0} IReV election records discovered and synchronized. Original evidence will be retained according to its storage policy.`,
+        `Pipeline complete — ${data.discovered ?? 0} elections discovered, ${ids.length} result sheets processed, ${failed} failed. Successful ephemeral evidence files are removed after extraction; failed or review-required files are retained.`,
       );
+      setError(failed > 0);
     } catch (e) {
       setError(true);
       setMessage(e instanceof Error ? e.message : String(e));
@@ -57,7 +93,7 @@ export function PipelineRunner() {
         <div
           style={{
             marginTop: 10,
-            width: 360,
+            width: 390,
             padding: 16,
             border: "1px solid #303844",
             borderRadius: 14,
