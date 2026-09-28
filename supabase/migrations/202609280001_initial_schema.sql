@@ -98,3 +98,30 @@ create policy "public read result sheets" on public.result_sheets for select usi
 create policy "public read extractions" on public.extractions for select using (true);
 create policy "public read result entries" on public.result_entries for select using (true);
 create policy "public read validation checks" on public.validation_checks for select using (true);
+
+create or replace function public.election_ids_for_geography(
+  election_ids uuid[],
+  p_state_id uuid,
+  p_lga_id uuid default null,
+  p_ward_id uuid default null,
+  p_polling_unit_id uuid default null
+)
+returns setof uuid
+language sql
+stable
+security definer
+set search_path = public
+as $$
+  select distinct rs.election_id
+  from public.result_sheets rs
+  join public.polling_units pu on pu.id = rs.polling_unit_id
+  join public.wards w on w.id = pu.ward_id
+  join public.lgas l on l.id = w.lga_id
+  where rs.election_id = any(election_ids)
+    and l.state_id = p_state_id
+    and (p_lga_id is null or l.id = p_lga_id)
+    and (p_ward_id is null or w.id = p_ward_id)
+    and (p_polling_unit_id is null or pu.id = p_polling_unit_id);
+$$;
+
+grant execute on function public.election_ids_for_geography(uuid[],uuid,uuid,uuid,uuid) to anon, authenticated;
