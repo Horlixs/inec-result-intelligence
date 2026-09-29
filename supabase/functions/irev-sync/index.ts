@@ -365,7 +365,7 @@ async function discoverApiWardStructure(
     if (cached) return cached;
 
     const lookup = await supabaseRest(
-      "states?select=id&name=eq." + encodeURIComponent(normalized) + "&limit=1",
+      "states?select=id&name=ilike." + encodeURIComponent(normalized) + "&limit=1",
       { method: "GET" },
     );
     const stateRows = Array.isArray(lookup.body) ? lookup.body as Array<Record<string, unknown>> : [];
@@ -404,12 +404,6 @@ async function discoverApiWardStructure(
       nestedLga?.id ??
       lgaRaw.id,
     );
-    const lgaOid = objectId(
-      nestedLga?._id ??
-      (typeof lgaRaw.lga === "string" ? lgaRaw.lga : null) ??
-      lgaRaw.lga_oid,
-    );
-
     const stateName = String(
       nestedState?.name ??
       lgaState?.name ??
@@ -481,16 +475,13 @@ async function discoverApiWardStructure(
         });
         const createdRows = Array.isArray(created.body) ? created.body as Array<Record<string, unknown>> : [];
         canonicalLgaId = createdRows[0]?.id ? String(createdRows[0].id) : null;
-      } else if (Number.isFinite(lgaNumericId) || lgaOid) {
+      } else if (Number.isFinite(lgaNumericId)) {
         await supabaseRest(
           "lgas?id=eq." + encodeURIComponent(canonicalLgaId),
           {
             method: "PATCH",
             headers: { Prefer: "return=minimal" },
-            body: JSON.stringify({
-              ...(Number.isFinite(lgaNumericId) ? { irev_lga_id: lgaNumericId } : {}),
-              ...(lgaOid ? { irev_lga_oid: lgaOid } : {}),
-            }),
+            body: JSON.stringify({ irev_lga_id: lgaNumericId }),
           },
         );
       }
