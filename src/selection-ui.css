@@ -1,0 +1,60 @@
+/* Election explorer selection layer — UI only. No data or behaviour changes. */
+
+.election-selection {
+  position: relative;
+}
+
+.election-selection select {
+  min-height: 46px;
+  border-radius: 14px;
+  border-color: rgb(39 39 42 / 0.72);
+  background: linear-gradient(180deg, rgb(24 24 27 / 0.72), rgb(9 9 11 / 0.78));
+  padding-left: 14px;
+  padding-right: 42px;
+  color: rgb(228 228 231);
+  box-shadow: inset 0 1px 0 rgb(255 255 255 / 0.025), 0 1px 2px rgb(0 0 0 / 0.16);
+  transition: border-color 180ms ease, background 180ms ease, box-shadow 180ms ease, transform 180ms ease;
+}
+
+.election-selection select:hover:not(:disabled) {
+  border-color: rgb(63 63 70 / 0.9);
+  background: linear-gradient(180deg, rgb(39 39 42 / 0.72), rgb(9 9 11 / 0.82));
+  transform: translateY(-1px);
+}
+
+.election-selection select:focus-visible {
+  border-color: rgb(113 113 122 / 0.9);
+  box-shadow: 0 0 0 3px rgb(161 161 170 / 0.08), inset 0 1px 0 rgb(255 255 255 / 0.035);
+}
+
+.election-selection select:disabled {
+  background: rgb(9 9 11 / 0.38);
+  border-color: rgb(39 39 42 / 0.38);
+}
+
+.election-selection option {
+  background: #101114;
+  color: #e4e4e7;
+  padding: 10px;
+}
+
+.election-selection option:checked {
+  background: #27272a;
+  color: #fafafa;
+}
+
+.election-selection label > span:first-child {
+  color: rgb(161 161 170);
+  letter-spacing: 0.13em;
+}
+
+.election-selection .selection-step-active select {
+  border-color: rgb(82 82 91 / 0.9);
+  background: linear-gradient(180deg, rgb(39 39 42 / 0.82), rgb(24 24 27 / 0.72));
+}
+
+@media (max-width: 767px) {
+  .election-selection select {
+    min-height: 48px;
+  }
+}
