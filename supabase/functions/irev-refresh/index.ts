@@ -9,6 +9,7 @@ const MAX_ATTEMPTS = 5;
 const WORKER_ID = `irev-refresh:${crypto.randomUUID()}`;
 
 const IREV_API_BASES = [
+  "https://lv001-g.inecelectionresults.ng/api/v1",
   "https://dolphin-app-sleqh.ondigitalocean.app/api/v1",
   "https://lv001-r.inecelectionresults.ng/api/v1",
 ];
@@ -374,6 +375,13 @@ Deno.serve(async request => {
       processed,
       failed,
       remaining: remaining ?? 0,
+      ward_jobs: wardJobs,
+      discovery: {
+        processed_elections: discovery?.processed ?? 0,
+        result_sheets_discovered: discovery?.result_sheets_discovered ?? 0,
+        elections: discovery?.elections ?? [],
+        diagnostics: discovery?.diagnostics ?? {},
+      },
     }), {
       headers: { "content-type": "application/json" },
     });

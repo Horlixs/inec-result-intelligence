@@ -35,6 +35,13 @@ function toElectionUrl(href: string, origin: string): string | null {
 }
 
 function externalIdFor(sourceUrl: string): string {
+  // Normalize HTML-discovered election routes to the same canonical identity
+  // produced by the IReV API ("irev:" + 24-character election id).
+  try {
+    const electionId = new URL(sourceUrl).pathname.split("/")[2] ?? "";
+    if (/^[a-f0-9]{24}$/i.test(electionId)) return "irev:" + electionId;
+  } catch {}
+
   return "irev:" + sourceUrl
     .replace(/^https:\/\/(?:inecelectionresults\.ng|irev\.inecnigeria\.org)\//, "")
     .replace(/[^a-zA-Z0-9]+/g, "-")
