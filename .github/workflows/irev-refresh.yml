@@ -15,14 +15,21 @@ jobs:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_ANON_KEY: ${{ secrets.SUPABASE_ANON_KEY }}
           IREV_CRON_SECRET: ${{ secrets.IREV_CRON_SECRET }}
+          GITHUB_EVENT_NAME: ${{ github.event_name }}
         run: |
           test -n "$SUPABASE_URL"
           test -n "$SUPABASE_ANON_KEY"
           test -n "$IREV_CRON_SECRET"
+
+          FORCE_REFRESH=false
+          if [ "$GITHUB_EVENT_NAME" = "workflow_dispatch" ]; then
+            FORCE_REFRESH=true
+          fi
+
           curl --fail-with-body --silent --show-error \
             -X POST "$SUPABASE_URL/functions/v1/irev-cron" \
             -H "Authorization: Bearer $SUPABASE_ANON_KEY" \
             -H "apikey: $SUPABASE_ANON_KEY" \
             -H "x-cron-secret: $IREV_CRON_SECRET" \
             -H "Content-Type: application/json" \
-            -d '{"trigger":"github-actions"}'
+            -d "{\"trigger\":\"github-actions\",\"force\":$FORCE_REFRESH}"

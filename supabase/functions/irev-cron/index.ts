@@ -9,14 +9,22 @@ Deno.serve(async request => {
   if (configuredSecret && request.headers.get("x-cron-secret") !== configuredSecret) {
     return new Response(JSON.stringify({ ok: false, error: "Unauthorized scheduler request" }), { status: 401 });
   }
+
+  let payload: { force?: boolean } = {};
+  try { payload = await request.json(); } catch {}
+
   const { data: schedule, error } = await supabase.from("pipeline_schedule").select("*").eq("name", "irev-refresh").eq("enabled", true).single();
   if (error || !schedule) return new Response(JSON.stringify({ ok: false, error: error?.message || "Schedule disabled" }), { status: 409 });
+
   const now = new Date();
-  if (new Date(schedule.next_run_at) > now) return new Response(JSON.stringify({ ok: true, skipped: true, next_run_at: schedule.next_run_at }));
+  if (!payload.force && new Date(schedule.next_run_at) > now) {
+    return new Response(JSON.stringify({ ok: true, skipped: true, next_run_at: schedule.next_run_at }));
+  }
+
   const response = await fetch(url.replace(/\/$/, "") + "/functions/v1/irev-refresh", {
     method: "POST",
     headers: { authorization: "Bearer " + key, "content-type": "application/json" },
-    body: JSON.stringify({ trigger: "cron" }),
+    body: JSON.stringify({ trigger: payload.force ? "manual" : "cron" }),
   });
   const data = await response.json().catch(() => ({}));
   const nextRun = new Date(now.getTime() + schedule.interval_minutes * 60_000).toISOString();
