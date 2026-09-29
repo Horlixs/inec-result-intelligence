@@ -89,7 +89,8 @@ async function processWardJob(job: Record<string, unknown>) {
   let sheets = 0;
 
   for (const row of rows) {
-    const puExternalId = String(row.polling_unit_id ?? row._id ?? "").trim();
+    const puExternalId = String(row.polling_unit_id ?? row._id ?? row.external_id ?? "").trim();
+    const puNumericId = Number(row.pu_id ?? row.polling_unit_id ?? row.id);
     const puCode = String(row.pu_code ?? row.code ?? "").trim() || null;
     const puName = String(row.name ?? row.polling_unit_name ?? "").trim() || "Unknown polling unit";
     let pollingUnitId: string | null = null;
@@ -105,10 +106,17 @@ async function processWardJob(job: Record<string, unknown>) {
         pu_code: puCode,
         name: puName,
         external_id: puExternalId || null,
-        irev_pu_id: /^\\d+$/.test(puExternalId) ? Number(puExternalId) : null,
+        irev_pu_id: Number.isInteger(puNumericId) ? puNumericId : null,
       }).select("id").single();
       if (created.error) throw created.error;
       pollingUnitId = created.data.id;
+    } else {
+      const { error: identityError } = await supabase.from("polling_units").update({
+        name: puName,
+        external_id: puExternalId || null,
+        irev_pu_id: Number.isInteger(puNumericId) ? puNumericId : null,
+      }).eq("id", pollingUnitId);
+      if (identityError) throw identityError;
     }
 
     const url = getDocumentUrl(row);
