@@ -55,7 +55,7 @@ async function processWard(job: Record<string, unknown>) {
     const result = await supabase.from("result_sheets").upsert({ election_id: electionId, polling_unit_id: pollingUnitId, source_url: sourceUrl, source_external_id: sourceExternalId, status: "discovered", evidence_status: "remote_only", storage_policy: "ephemeral", discovered_at: new Date().toISOString() }, { onConflict: "election_id,source_url" });
     if (result.error) throw result.error; sheets++;
   }
-  return { polling_units: puRows.length, result_sheets: sheets };
+  return { polling_units: puRows.length, result_sheets: sheets, diagnostics };
 }
 async function finishWard(jobId: string, attempts: number, ok: boolean, error?: string) { const update = ok ? { status: "completed", locked_at: null, locked_by: null, last_error: null, last_synced_at: new Date().toISOString(), updated_at: new Date().toISOString() } : { status: attempts < MAX_ATTEMPTS ? "queued" : "failed", locked_at: null, locked_by: null, last_error: error ?? "Unknown error", available_at: new Date(Date.now() + 15 * 60_000).toISOString(), updated_at: new Date().toISOString() }; const result = await supabase.from("irev_ward_sync_jobs").update(update).eq("id", jobId); if (result.error) throw result.error; }
 async function enqueueSheets() { const { data, error } = await supabase.from("result_sheets").select("id").eq("status", "discovered").order("discovered_at", { ascending: true }).limit(100); if (error) throw error; if (!data?.length) return 0; const result = await supabase.from("result_processing_jobs").upsert(data.map(x => ({ result_sheet_id: x.id, status: "queued" })), { onConflict: "result_sheet_id", ignoreDuplicates: true }); if (result.error) throw result.error; return data.length; }
@@ -68,10 +68,24 @@ Deno.serve(async request => {
   if (request.method !== "POST") return json({ ok: false, error: "POST required" }, 405);
   const started = Date.now(); let wardProcessed = 0; let wardFailed = 0; let sheetProcessed = 0; let sheetFailed = 0; let queued = 0;
   try {
-    while (wardProcessed + wardFailed < MAX_WARD_JOBS && Date.now() - started < DEADLINE_MS) { const job = await claimWard(); if (!job) break; try { await processWard(job); await finishWard(job.job_id, Number(job.attempts), true); wardProcessed++; } catch (error) { wardFailed++; await finishWard(job.job_id, Number(job.attempts), false, error instanceof Error ? error.message : String(error)); } }
+    const wardDiagnostics: Array<Record<string, unknown>> = [];
+    while (wardProcessed + wardFailed < MAX_WARD_JOBS && Date.now() - started < DEADLINE_MS) {
+      const job = await claimWard();
+      if (!job) break;
+      try {
+        const outcome = await processWard(job);
+        wardDiagnostics.push({ election_id: job.election_id, ward_id: job.ward_id, ...outcome.diagnostics, polling_units: outcome.polling_units, result_sheets: outcome.result_sheets });
+        await finishWard(job.job_id, Number(job.attempts), true);
+        wardProcessed++;
+      } catch (error) {
+        wardFailed++;
+        wardDiagnostics.push({ election_id: job.election_id, ward_id: job.ward_id, error: error instanceof Error ? error.message : String(error) });
+        await finishWard(job.job_id, Number(job.attempts), false, error instanceof Error ? error.message : String(error));
+      }
+    }
     if (Date.now() - started < DEADLINE_MS) queued = await enqueueSheets();
     while (sheetProcessed + sheetFailed < MAX_SHEET_JOBS && Date.now() - started < DEADLINE_MS) { const job = await claimSheet(); if (!job) break; try { const result = await invokeProcess(String(job.result_sheet_id)); await finishSheet(job.job_id, Number(job.attempts), Boolean(result?.ok), result?.error); if (result?.ok) sheetProcessed++; else sheetFailed++; } catch (error) { sheetFailed++; await finishSheet(job.job_id, Number(job.attempts), false, error instanceof Error ? error.message : String(error)); } }
     const remaining = await queueCounts();
-    return json({ ok: true, queued, processed: sheetProcessed, failed: sheetFailed, ward_jobs: { processed: wardProcessed, failed: wardFailed }, remaining: remaining.total, remaining_ward_jobs: remaining.ward_jobs, remaining_sheet_jobs: remaining.sheet_jobs, max_ward_jobs: MAX_WARD_JOBS, max_sheet_jobs: MAX_SHEET_JOBS, elapsed_ms: Date.now() - started });
+    return json({ ok: true, queued, processed: sheetProcessed, failed: sheetFailed, ward_jobs: { processed: wardProcessed, failed: wardFailed }, ward_diagnostics: wardDiagnostics, remaining: remaining.total, remaining_ward_jobs: remaining.ward_jobs, remaining_sheet_jobs: remaining.sheet_jobs, max_ward_jobs: MAX_WARD_JOBS, max_sheet_jobs: MAX_SHEET_JOBS, elapsed_ms: Date.now() - started });
   } catch (error) { return json({ ok: false, error: error instanceof Error ? error.message : String(error), ward_jobs: { processed: wardProcessed, failed: wardFailed }, processed: sheetProcessed, failed: sheetFailed }, 500); }
 });
