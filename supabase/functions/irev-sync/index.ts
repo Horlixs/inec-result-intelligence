@@ -19,10 +19,17 @@ const MAX_ELECTIONS_PER_SYNC = 3;
 const MAX_DIRECTORY_PAGES = 20;
 const MAX_CRAWL_PAGES = 100;
 
+const CORS_HEADERS = {
+  "Access-Control-Allow-Origin": "https://inec-result-intelligence.vercel.app",
+  "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type",
+  "Access-Control-Allow-Methods": "POST, OPTIONS",
+  "Access-Control-Max-Age": "86400",
+};
+
 function json(data: unknown, status = 200) {
   return new Response(JSON.stringify(data), {
     status,
-    headers: { "content-type": "application/json; charset=utf-8" },
+    headers: { ...CORS_HEADERS, "content-type": "application/json; charset=utf-8" },
   });
 }
 
@@ -474,6 +481,7 @@ async function crawlElection(sourceUrl: string): Promise<string[]> {
 
 Deno.serve(async request => {
   const startedAt = new Date().toISOString();
+  if (request.method === "OPTIONS") return new Response(null, { status: 204, headers: CORS_HEADERS });
   if (request.method !== "POST") return json({ ok: false, error: "POST required" }, 405);
 
   let stage = "startup";
