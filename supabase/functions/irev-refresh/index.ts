@@ -62,30 +62,53 @@ function getDocumentUrl(
   row: Record<string, unknown>,
   electionExternalId: string,
 ): string | null {
-  const direct = [row.url, row.document_url, row.file_url];
+  // IReV's polling-unit identity is the Mongo object id in _id. The numeric
+  // polling_unit_id is a different identity and cannot be used in the public
+  // document route.
+  const resolveUrl = (value: unknown): string | null => {
+    if (typeof value !== "string" || !value.trim()) return null;
+    try {
+      const parsed = new URL(value.trim(), "https://inecelectionresults.ng/");
+      if (parsed.protocol !== "https:") return null;
+      return parsed.toString();
+    } catch {
+      return null;
+    }
+  };
+
+  const direct = [row.url, row.document_url, row.file_url, row.href];
   for (const value of direct) {
-    if (typeof value === "string" && value.startsWith("http")) return value;
+    const resolved = resolveUrl(value);
+    if (resolved) return resolved;
   }
 
-  for (const value of [row.document, row.result, row.result_sheet, row.file]) {
+  for (const value of [row.document, row.result, row.result_sheet, row.file, row.resultSheet]) {
     if (!value || typeof value !== "object") continue;
     const object = value as Record<string, unknown>;
-    for (const key of ["url", "document_url", "file_url", "src", "path"]) {
-      const candidate = object[key];
-      if (typeof candidate === "string" && candidate.startsWith("http")) return candidate;
+    for (const key of ["url", "document_url", "file_url", "src", "path", "href"]) {
+      const resolved = resolveUrl(object[key]);
+      if (resolved) return resolved;
     }
   }
 
-  // The current IReV UI exposes the uploaded sheet behind the polling-unit
-  // "Open" action. Some API responses contain only the polling-unit identity,
-  // so reconstruct the public document route when the direct asset/page URL
-  // is omitted from the payload.
+  if (Array.isArray(row.old_documents)) {
+    for (const value of [...row.old_documents].reverse()) {
+      if (!value || typeof value !== "object") continue;
+      const object = value as Record<string, unknown>;
+      for (const key of ["url", "document_url", "file_url", "src", "path", "href"]) {
+        const resolved = resolveUrl(object[key]);
+        if (resolved) return resolved;
+      }
+    }
+  }
+
+  // The public IReV UI's Open action resolves to this route. It requires the
+  // polling-unit Mongo object id, not the numeric polling_unit_id.
   const puId = String(
-    row.polling_unit_id ??
-    row.pollingUnitId ??
     row._id ??
     row.external_id ??
-    row.id ??
+    row.pollingUnitId ??
+    row.polling_unit_oid ??
     "",
   ).trim();
 
@@ -114,9 +137,13 @@ async function processWardJob(job: Record<string, unknown>) {
   const payload = await fetchIrevWard(irevElectionId, String(ward.data.irev_ward_oid));
   const rows = irevRows(payload);
   let sheets = 0;
+  let rowsWithDocuments = 0;
+  let constructedDocuments = 0;
 
   for (const row of rows) {
-    const puExternalId = String(row.polling_unit_id ?? row._id ?? row.external_id ?? "").trim();
+    // Preserve both IReV identities: _id is the object identity used by the
+    // public document route; polling_unit_id is the numeric identity.
+    const puExternalId = String(row._id ?? row.external_id ?? "").trim();
     const puNumericId = Number(row.pu_id ?? row.polling_unit_id ?? row.id);
     const puCode = String(row.pu_code ?? row.code ?? "").trim() || null;
     const puName = String(row.name ?? row.polling_unit_name ?? "").trim() || "Unknown polling unit";
@@ -146,13 +173,33 @@ async function processWardJob(job: Record<string, unknown>) {
       if (identityError) throw identityError;
     }
 
+    const directDocumentPresent = Boolean(
+      row.document ||
+      row.result ||
+      row.result_sheet ||
+      row.file ||
+      row.file_url ||
+      row.document_url ||
+      row.url ||
+      row.old_documents,
+    );
     const url = getDocumentUrl(row, irevElectionId);
     if (!url) continue;
+
+    rowsWithDocuments++;
+    if (!directDocumentPresent && /\/pu\/[^/]+\/document$/.test(url)) {
+      constructedDocuments++;
+    }
 
     const document = row.document && typeof row.document === "object"
       ? row.document as Record<string, unknown>
       : {};
-    const sourceExternalId = String(document._id ?? row.document_id ?? url);
+    const sourceExternalId = String(
+      document._id ??
+      row.document_id ??
+      row._id ??
+      url,
+    );
 
     const result = await supabase.from("result_sheets").upsert({
       election_id: electionId,
@@ -168,7 +215,12 @@ async function processWardJob(job: Record<string, unknown>) {
     sheets++;
   }
 
-  return { polling_units: rows.length, result_sheets: sheets };
+  return {
+    polling_units: rows.length,
+    result_sheets: sheets,
+    rows_with_documents: rowsWithDocuments,
+    constructed_documents: constructedDocuments,
+  };
 }
 
 async function drainWardJobs(maxJobs: number) {
