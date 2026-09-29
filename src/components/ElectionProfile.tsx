@@ -261,7 +261,7 @@ export function ElectionProfile(_props: ElectionProfileProps) {
         </div>}
       </div>
 
-      <div className="mt-5 border-t border-zinc-800/60 pt-5">
+      <div className="mt-5 border-t border-zinc-800/60 pt-5" style={{ display: selected ? "none" : "block" }}>
         <div className="flex items-center justify-between gap-4">
           <div><p className="text-[10px] font-semibold uppercase tracking-[0.18em] text-zinc-600">Available elections</p><p className="mt-1 text-xs text-zinc-600">{filtered.length} matching record{filtered.length === 1 ? "" : "s"}</p></div>
           {(year || category || type || stateId || lgaId || wardId || pollingUnitId) && <button onClick={() => { setYear(""); setCategory(""); setType(""); setStateId(""); setLgaId(""); setWardId(""); setPollingUnitId(""); setGeoElectionIds(null); setSelected(""); }} className="text-xs font-medium text-zinc-500 hover:text-zinc-200">Clear all</button>}
