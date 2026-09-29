@@ -8,6 +8,134 @@ const MAX_JOBS_PER_REFRESH = 20;
 const MAX_ATTEMPTS = 5;
 const WORKER_ID = `irev-refresh:${crypto.randomUUID()}`;
 
+const IREV_API_BASES = [
+  "https://dolphin-app-sleqh.ondigitalocean.app/api/v1",
+  "https://lv001-r.inecelectionresults.ng/api/v1",
+];
+const IREV_PUBLIC_KEY = "4SXkHM7Amb1SbF4C8do6816dmbbwqPp7akRbrmcV";
+const WARD_MAX_ATTEMPTS = 5;
+
+async function fetchIrevWard(electionExternalId: string, wardObjectId: string): Promise<unknown> {
+  let lastError: unknown = null;
+  for (const base of IREV_API_BASES) {
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 25000);
+    try {
+      const response = await fetch(
+        base + "/elections/" + encodeURIComponent(electionExternalId) + "/pus?ward=" + encodeURIComponent(wardObjectId),
+        {
+          headers: {
+            "user-agent": "INEC-Result-Intelligence/1.0 source-collector",
+            accept: "application/json, text/plain, */*",
+            origin: "https://inecelectionresults.ng",
+            referer: "https://inecelectionresults.ng/",
+            "x-api-key": IREV_PUBLIC_KEY,
+            "x-api-rt": String(Date.now()),
+          },
+          signal: controller.signal,
+        },
+      );
+      if (!response.ok) {
+        lastError = new Error("IReV API HTTP " + response.status);
+        continue;
+      }
+      const text = await response.text();
+      return text ? JSON.parse(text) : null;
+    } catch (error) {
+      lastError = error;
+    } finally {
+      clearTimeout(timeout);
+    }
+  }
+  throw lastError instanceof Error ? lastError : new Error("IReV ward request failed");
+}
+
+function irevRows(payload: unknown): Array<Record<string, unknown>> {
+  if (Array.isArray(payload)) return payload.filter((row): row is Record<string, unknown> => !!row && typeof row === "object");
+  if (payload && typeof payload === "object") {
+    const data = (payload as Record<string, unknown>).data;
+    if (Array.isArray(data)) return data.filter((row): row is Record<string, unknown> => !!row && typeof row === "object");
+  }
+  return [];
+}
+
+function getDocumentUrl(row: Record<string, unknown>): string | null {
+  const direct = [row.url, row.document_url, row.file_url];
+  for (const value of direct) if (typeof value === "string" && value.startsWith("http")) return value;
+  for (const value of [row.document, row.result, row.result_sheet, row.file]) {
+    if (!value || typeof value !== "object") continue;
+    const object = value as Record<string, unknown>;
+    for (const key of ["url", "document_url", "file_url", "src", "path"]) {
+      const candidate = object[key];
+      if (typeof candidate === "string" && candidate.startsWith("http")) return candidate;
+    }
+  }
+  return null;
+}
+
+async function processWardJob(job: Record<string, unknown>) {
+  const electionId = String(job.election_id);
+  const wardId = String(job.ward_id);
+
+  const election = await supabase.from("elections").select("external_id").eq("id", electionId).single();
+  if (election.error || !election.data?.external_id) throw new Error("Election IReV identity unavailable");
+
+  const ward = await supabase.from("wards").select("irev_ward_oid").eq("id", wardId).single();
+  if (ward.error || !ward.data?.irev_ward_oid) throw new Error("Ward IReV object identity unavailable");
+
+  const irevElectionId = String(election.data.external_id).replace(/^irev:/, "");
+  const payload = await fetchIrevWard(irevElectionId, String(ward.data.irev_ward_oid));
+  const rows = irevRows(payload);
+  let sheets = 0;
+
+  for (const row of rows) {
+    const puExternalId = String(row.polling_unit_id ?? row._id ?? "").trim();
+    const puCode = String(row.pu_code ?? row.code ?? "").trim() || null;
+    const puName = String(row.name ?? row.polling_unit_name ?? "").trim() || "Unknown polling unit";
+    let pollingUnitId: string | null = null;
+
+    if (puCode) {
+      const lookup = await supabase.from("polling_units").select("id").eq("ward_id", wardId).eq("pu_code", puCode).maybeSingle();
+      pollingUnitId = lookup.data?.id ?? null;
+    }
+
+    if (!pollingUnitId) {
+      const created = await supabase.from("polling_units").insert({
+        ward_id: wardId,
+        pu_code: puCode,
+        name: puName,
+        external_id: puExternalId || null,
+        irev_pu_id: /^\\d+$/.test(puExternalId) ? Number(puExternalId) : null,
+      }).select("id").single();
+      if (created.error) throw created.error;
+      pollingUnitId = created.data.id;
+    }
+
+    const url = getDocumentUrl(row);
+    if (!url) continue;
+
+    const document = row.document && typeof row.document === "object"
+      ? row.document as Record<string, unknown>
+      : {};
+    const sourceExternalId = String(document._id ?? row.document_id ?? url);
+
+    const result = await supabase.from("result_sheets").upsert({
+      election_id: electionId,
+      polling_unit_id: pollingUnitId,
+      source_url: url,
+      source_external_id: sourceExternalId,
+      status: "discovered",
+      evidence_status: "remote_only",
+      storage_policy: "ephemeral",
+      discovered_at: new Date().toISOString(),
+    }, { onConflict: "election_id,source_url" });
+    if (result.error) throw result.error;
+    sheets++;
+  }
+
+  return { polling_units: rows.length, result_sheets: sheets };
+}
+
 async function invoke(name: string, body: unknown) {
   const response = await fetch(url.replace(/\/$/, "") + "/functions/v1/" + name, {
     method: "POST",
