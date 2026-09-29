@@ -10,11 +10,11 @@ function HomePage() {
 }
 function ElectionsPage(){ return <ElectionDirectory/>; }
 function ElectionYearRoute(){ const {year}=useParams({from:"/elections/year/$year"}); return <ElectionYearPage year={year}/>; }
-function ElectionResultsPage(){ const {electionId}=useParams({from:"/elections/$electionId/results"}); return <div><div className="mb-5 flex flex-wrap items-center gap-2 text-xs"><Link to="/" className="text-zinc-600 hover:text-zinc-300">Home</Link><span className="text-zinc-800">/</span><Link to="/elections" className="text-zinc-600 hover:text-zinc-300">Elections</Link><span className="text-zinc-800">/</span><span className="text-zinc-300">Result</span></div><ElectionProfile selectedElectionId={electionId} detailOnly onElectionSelect={(id)=>window.history.replaceState({}, "", "/elections/"+id+"/results")} onBackToElections={()=>{void history.pushState({}, "", "/elections"); location.reload();}}/></div>; }
+function ElectionResultsPage(){ const {electionId}=useParams({from:"/elections/$electionId/results"}); const navigate=useNavigate(); return <div><div className="mb-5 flex flex-wrap items-center gap-2 text-xs"><Link to="/" className="text-zinc-600 hover:text-zinc-300">Home</Link><span className="text-zinc-800">/</span><Link to="/elections" className="text-zinc-600 hover:text-zinc-300">Elections</Link><span className="text-zinc-800">/</span><span className="text-zinc-300">Result</span></div><ElectionProfile selectedElectionId={electionId} detailOnly onElectionSelect={(id)=>{void navigate({to:"/elections/$electionId/results",params:{electionId:id}})}} onBackToElections={()=>{void navigate({to:"/elections"})}}/></div>; }
 function LegacyElectionRoute(){ const {electionId}=useParams({from:"/elections/$electionId"}); return <Navigate to="/elections/$electionId/results" params={{electionId}}/>; }
 function Placeholder({title}:{title:string}){return <div className="rounded-3xl border border-zinc-800/60 bg-zinc-900/35 p-12 text-center"><p className="text-sm font-medium text-zinc-300">{title}</p><p className="mt-2 text-xs text-zinc-600">This workspace is ready for the corresponding evidence module.</p></div>}
 
-const rootRoute=createRootRoute({component:()=> <AppShell><Outlet/></AppShell>,notFoundComponent:()=> <Placeholder title="Page not found"/>});
+const rootRoute=createRootRoute({component:()=> <AppShell/>,notFoundComponent:()=> <Placeholder title="Page not found"/>});
 const indexRoute=createRoute({getParentRoute:()=>rootRoute,path:"/",component:HomePage});
 const electionsRoute=createRoute({getParentRoute:()=>rootRoute,path:"/elections",component:ElectionsPage});
 const yearRoute=createRoute({getParentRoute:()=>rootRoute,path:"/elections/year/$year",component:ElectionYearRoute});
