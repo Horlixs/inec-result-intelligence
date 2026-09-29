@@ -82,3 +82,5 @@ for (const item of candidates.slice(0, 10)) {
 
 console.log("=== RAW SAMPLE ===");
 console.log(JSON.stringify(payload, null, 2).slice(0, 12000));
+
+// diagnostic trigger marker
