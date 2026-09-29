@@ -1,6 +1,5 @@
 import { CalendarDays, ChevronDown, ChevronRight, Layers3 } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
-import { Link } from "@tanstack/react-router";
 import { supabase } from "../lib/supabase";
 
 interface Election {
@@ -164,10 +163,9 @@ export function ElectionDirectory() {
 
                     <div className="space-y-2">
                       {elections.map((election) => (
-                        <Link
+                        <a
                           key={election.id}
-                          to="/elections/$electionId/results"
-                          params={{ electionId: election.id }}
+                          href={"/elections/" + election.id + "/results"}
                           className="group flex items-center gap-4 rounded-2xl border border-zinc-800/60 bg-zinc-900/35 px-4 py-4 transition-all hover:border-zinc-700 hover:bg-zinc-900/70"
                         >
                           <div className="hidden size-9 shrink-0 place-items-center rounded-xl bg-zinc-950 text-zinc-600 sm:grid">
@@ -197,7 +195,7 @@ export function ElectionDirectory() {
                             size={17}
                             className="shrink-0 text-zinc-700 transition-transform group-hover:translate-x-1 group-hover:text-zinc-400"
                           />
-                        </Link>
+                        </a>
                       ))}
                     </div>
                   </div>
