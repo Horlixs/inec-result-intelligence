@@ -565,6 +565,7 @@ Deno.serve(async request => {
             }
             if (queuedWardJobs > 0) break;
           }
+        }
 
         const resultLinks = queuedWardJobs === 0 ? await crawlElection(election.source_url) : [];
         const sheetRows = resultLinks.map(url => ({ election_id: electionId, source_url: url, source_external_id: url, status: "discovered", evidence_status: "remote_only", storage_policy: "ephemeral" }));
