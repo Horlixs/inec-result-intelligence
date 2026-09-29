@@ -68,53 +68,58 @@ function getDocumentUrl(
   row: Record<string, unknown>,
   electionExternalId: string,
 ): string | null {
-  // IReV's polling-unit identity is the Mongo object id in _id. The numeric
-  // polling_unit_id is a different identity and cannot be used in the public
-  // document route.
+  const nestedPu = row.polling_unit && typeof row.polling_unit === "object"
+    ? row.polling_unit as Record<string, unknown>
+    : null;
+
   const resolveUrl = (value: unknown): string | null => {
     if (typeof value !== "string" || !value.trim()) return null;
     try {
       const parsed = new URL(value.trim(), "https://inecelectionresults.ng/");
-      if (parsed.protocol !== "https:") return null;
-      return parsed.toString();
+      if (parsed.protocol === "http:") parsed.protocol = "https:";
+      return parsed.protocol === "https:" ? parsed.toString() : null;
     } catch {
       return null;
     }
   };
 
-  const direct = [row.url, row.document_url, row.file_url, row.href];
-  for (const value of direct) {
-    const resolved = resolveUrl(value);
-    if (resolved) return resolved;
-  }
-
-  for (const value of [row.document, row.result, row.result_sheet, row.file, row.resultSheet]) {
-    if (!value || typeof value !== "object") continue;
+  const inspect = (value: unknown): string | null => {
+    const direct = resolveUrl(value);
+    if (direct) return direct;
+    if (!value || typeof value !== "object") return null;
     const object = value as Record<string, unknown>;
     for (const key of ["url", "document_url", "file_url", "src", "path", "href"]) {
       const resolved = resolveUrl(object[key]);
       if (resolved) return resolved;
     }
+    return null;
+  };
+
+  for (const value of [
+    row.document, row.result, row.result_sheet, row.file,
+    row.file_url, row.document_url, row.url, row.href,
+    nestedPu?.document, nestedPu?.result, nestedPu?.result_sheet,
+    nestedPu?.file, nestedPu?.file_url, nestedPu?.document_url, nestedPu?.url,
+  ]) {
+    const resolved = inspect(value);
+    if (resolved) return resolved;
   }
 
-  if (Array.isArray(row.old_documents)) {
-    for (const value of [...row.old_documents].reverse()) {
-      if (!value || typeof value !== "object") continue;
-      const object = value as Record<string, unknown>;
-      for (const key of ["url", "document_url", "file_url", "src", "path", "href"]) {
-        const resolved = resolveUrl(object[key]);
-        if (resolved) return resolved;
-      }
+  for (const value of [row.old_documents, nestedPu?.old_documents]) {
+    if (!Array.isArray(value)) continue;
+    for (const item of [...value].reverse()) {
+      const resolved = inspect(item);
+      if (resolved) return resolved;
     }
   }
 
-  // The public IReV UI's Open action resolves to this route. It requires the
-  // polling-unit Mongo object id, not the numeric polling_unit_id.
+  // In the documented IReV response, the top-level _id is the result
+  // wrapper; the polling-unit document route uses polling_unit._id.
   const puId = String(
-    row._id ??
-    row.external_id ??
-    row.pollingUnitId ??
+    nestedPu?._id ??
     row.polling_unit_oid ??
+    row.external_id ??
+    row._id ??
     "",
   ).trim();
 
@@ -142,21 +147,53 @@ async function processWardJob(job: Record<string, unknown>) {
   const irevElectionId = String(election.data.external_id).replace(/^irev:/, "");
   const payload = await fetchIrevWard(irevElectionId, String(ward.data.irev_ward_oid));
   const rows = irevRows(payload);
+
   let sheets = 0;
   let rowsWithDocuments = 0;
   let constructedDocuments = 0;
 
   for (const row of rows) {
-    // Preserve both IReV identities: _id is the object identity used by the
-    // public document route; polling_unit_id is the numeric identity.
-    const puExternalId = String(row._id ?? row.external_id ?? "").trim();
-    const puNumericId = Number(row.pu_id ?? row.polling_unit_id ?? row.id);
-    const puCode = String(row.pu_code ?? row.code ?? "").trim() || null;
-    const puName = String(row.name ?? row.polling_unit_name ?? "").trim() || "Unknown polling unit";
+    const nestedPu = row.polling_unit && typeof row.polling_unit === "object"
+      ? row.polling_unit as Record<string, unknown>
+      : null;
+
+    const puExternalId = String(
+      nestedPu?._id ?? row.polling_unit_oid ?? row.external_id ?? row._id ?? "",
+    ).trim();
+
+    const puNumericId = Number(
+      nestedPu?.polling_unit_id ?? row.pu_id ?? row.polling_unit_id ?? row.id,
+    );
+
+    const puCode = String(
+      row.pu_code ?? nestedPu?.pu_code ?? row.code ?? nestedPu?.code ?? "",
+    ).trim() || null;
+
+    const puName = String(
+      row.name ?? row.polling_unit_name ?? nestedPu?.name ?? "",
+    ).trim() || "Unknown polling unit";
+
     let pollingUnitId: string | null = null;
 
     if (puCode) {
-      const lookup = await supabase.from("polling_units").select("id").eq("ward_id", wardId).eq("pu_code", puCode).maybeSingle();
+      const lookup = await supabase
+        .from("polling_units")
+        .select("id")
+        .eq("ward_id", wardId)
+        .eq("pu_code", puCode)
+        .maybeSingle();
+      if (lookup.error) throw lookup.error;
+      pollingUnitId = lookup.data?.id ?? null;
+    }
+
+    if (!pollingUnitId && puExternalId) {
+      const lookup = await supabase
+        .from("polling_units")
+        .select("id")
+        .eq("ward_id", wardId)
+        .eq("external_id", puExternalId)
+        .maybeSingle();
+      if (lookup.error) throw lookup.error;
       pollingUnitId = lookup.data?.id ?? null;
     }
 
@@ -171,39 +208,37 @@ async function processWardJob(job: Record<string, unknown>) {
       if (created.error) throw created.error;
       pollingUnitId = created.data.id;
     } else {
-      const { error: identityError } = await supabase.from("polling_units").update({
+      const { error } = await supabase.from("polling_units").update({
         name: puName,
         external_id: puExternalId || null,
         irev_pu_id: Number.isInteger(puNumericId) ? puNumericId : null,
       }).eq("id", pollingUnitId);
-      if (identityError) throw identityError;
+      if (error) throw error;
     }
 
-    const directDocumentPresent = Boolean(
-      row.document ||
-      row.result ||
-      row.result_sheet ||
-      row.file ||
-      row.file_url ||
-      row.document_url ||
-      row.url ||
-      row.old_documents,
-    );
     const url = getDocumentUrl(row, irevElectionId);
     if (!url) continue;
 
     rowsWithDocuments++;
-    if (!directDocumentPresent && /\/pu\/[^/]+\/document$/.test(url)) {
+    if (
+      !row.document && !row.url && !row.file_url &&
+      !(nestedPu && (nestedPu.document || nestedPu.url || nestedPu.file_url))
+    ) {
       constructedDocuments++;
     }
 
-    const document = row.document && typeof row.document === "object"
-      ? row.document as Record<string, unknown>
-      : {};
+    const document =
+      row.document && typeof row.document === "object"
+        ? row.document as Record<string, unknown>
+        : nestedPu?.document && typeof nestedPu.document === "object"
+          ? nestedPu.document as Record<string, unknown>
+          : {};
+
     const sourceExternalId = String(
       document._id ??
       row.document_id ??
-      row._id ??
+      nestedPu?.document_id ??
+      puExternalId ??
       url,
     );
 
@@ -217,6 +252,7 @@ async function processWardJob(job: Record<string, unknown>) {
       storage_policy: "ephemeral",
       discovered_at: new Date().toISOString(),
     }, { onConflict: "election_id,source_url" });
+
     if (result.error) throw result.error;
     sheets++;
   }
