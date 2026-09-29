@@ -59,9 +59,15 @@ function irevRows(payload: unknown): Array<Record<string, unknown>> {
   return [];
 }
 
-function getDocumentUrl(row: Record<string, unknown>): string | null {
+function getDocumentUrl(
+  row: Record<string, unknown>,
+  electionExternalId: string,
+): string | null {
   const direct = [row.url, row.document_url, row.file_url];
-  for (const value of direct) if (typeof value === "string" && value.startsWith("http")) return value;
+  for (const value of direct) {
+    if (typeof value === "string" && value.startsWith("http")) return value;
+  }
+
   for (const value of [row.document, row.result, row.result_sheet, row.file]) {
     if (!value || typeof value !== "object") continue;
     const object = value as Record<string, unknown>;
@@ -70,6 +76,28 @@ function getDocumentUrl(row: Record<string, unknown>): string | null {
       if (typeof candidate === "string" && candidate.startsWith("http")) return candidate;
     }
   }
+
+  // The current IReV UI exposes the uploaded sheet behind the polling-unit
+  // "Open" action. Some API responses contain only the polling-unit identity,
+  // so reconstruct the public document route when the direct asset/page URL
+  // is omitted from the payload.
+  const puId = String(
+    row.polling_unit_id ??
+    row.pollingUnitId ??
+    row._id ??
+    row.external_id ??
+    row.id ??
+    "",
+  ).trim();
+
+  if (/^[a-f0-9]{24}$/i.test(electionExternalId) && /^[a-f0-9]{24}$/i.test(puId)) {
+    return "https://inecelectionresults.ng/elections/" +
+      encodeURIComponent(electionExternalId) +
+      "/pu/" +
+      encodeURIComponent(puId) +
+      "/document";
+  }
+
   return null;
 }
 
@@ -119,7 +147,7 @@ async function processWardJob(job: Record<string, unknown>) {
       if (identityError) throw identityError;
     }
 
-    const url = getDocumentUrl(row);
+    const url = getDocumentUrl(row, irevElectionId);
     if (!url) continue;
 
     const document = row.document && typeof row.document === "object"
