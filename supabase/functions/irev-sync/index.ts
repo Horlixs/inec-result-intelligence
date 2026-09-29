@@ -4,9 +4,8 @@ const ORIGIN = "https://inecelectionresults.ng";
 const CURRENT_IREV_ORIGIN = "https://irev.inecnigeria.org";
 const UA = "INEC-Result-Intelligence/1.0 source-collector";
 const API_BASES = [
-  // This is the public IReV API host used by the documented polling-unit
-  // and ward routes, including the document metadata returned for Quick View.
-  "https://lv001-g.inecelectionresults.ng/api/v1",
+  // Current IReV API hosts. lv001-g no longer resolves from the Edge
+  // Function runtime, so keep it out of the active rotation.
   "https://dolphin-app-sleqh.ondigitalocean.app/api/v1",
   "https://lv001-r.inecelectionresults.ng/api/v1",
 ];
