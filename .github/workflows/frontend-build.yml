@@ -1,4 +1,5 @@
 name: Frontend build
+# Production TypeScript verification
 
 on:
   push:
