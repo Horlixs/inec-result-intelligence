@@ -1,5 +1,5 @@
 import { ArrowUpRight, CalendarDays, CheckCircle2, ChevronDown, ChevronRight, ExternalLink, FileImage, MapPin, RefreshCw, Search, ShieldCheck, Users, XCircle } from "lucide-react";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { supabase } from "../lib/supabase";
 
 interface ElectionProfileProps { selectedElectionId?: string; onElectionSelect?: (electionId: string) => void; onBackToElections?: () => void; detailOnly?: boolean; }
@@ -98,22 +98,25 @@ export function ElectionProfile({ selectedElectionId, onElectionSelect, onBackTo
   const [error, setError] = useState("");
   const [geoElectionIds, setGeoElectionIds] = useState<string[] | null>(null);
   const [geoReady, setGeoReady] = useState(false);
+  const loadRequestRef = useRef(0);
 
   async function load(): Promise<void> {
+    const requestId = ++loadRequestRef.current;
+    const isCurrent = () => requestId === loadRequestRef.current;
+
     setLoading(true);
     setError("");
     if (selectedElectionId) setSelectionLoading(true);
 
     try {
-      if (!supabase) {
-        throw new Error("Supabase is not configured in this deployment.");
-      }
+      if (!supabase) throw new Error("Supabase is not configured in this deployment.");
 
       const [electionsResponse, statesResponse] = await Promise.all([
         supabase.from("elections").select("id,name,election_type,election_date,source_url,status").order("election_date", { ascending: true }),
         supabase.from("states").select("id,name,code").order("name", { ascending: true }),
       ]);
 
+      if (!isCurrent()) return;
       if (electionsResponse.error) throw electionsResponse.error;
       if (statesResponse.error) throw statesResponse.error;
 
@@ -138,17 +141,19 @@ export function ElectionProfile({ selectedElectionId, onElectionSelect, onBackTo
         .eq("id", selectedElectionId)
         .maybeSingle();
 
-      if (directResponse.error) {
-        throw new Error(`Election could not be loaded: ${directResponse.error.message}`);
-      }
+      if (!isCurrent()) return;
+      if (directResponse.error) throw new Error(`Election could not be loaded: ${directResponse.error.message}`);
 
       setSelectedElection((directResponse.data ?? null) as Election | null);
     } catch (cause) {
+      if (!isCurrent()) return;
       setSelectedElection(null);
       setError(cause instanceof Error ? cause.message : "Unable to load election data.");
     } finally {
-      setLoading(false);
-      setSelectionLoading(false);
+      if (isCurrent()) {
+        setLoading(false);
+        setSelectionLoading(false);
+      }
     }
   }
 
