@@ -92,6 +92,7 @@ export function ElectionProfile({ selectedElectionId, onElectionSelect, onBackTo
   const [q, setQ] = useState("");
   const [tab, setTab] = useState<Tab>("overview");
   const [loading, setLoading] = useState(true);
+  const [selectedElection, setSelectedElection] = useState<Election | null>(null);
   const [geoLoading, setGeoLoading] = useState(false);
   const [error, setError] = useState("");
   const [geoElectionIds, setGeoElectionIds] = useState<string[] | null>(null);
@@ -105,12 +106,14 @@ export function ElectionProfile({ selectedElectionId, onElectionSelect, onBackTo
       supabase.from("states").select("id,name,code").order("name", { ascending: true }),
     ]);
     if (electionsResponse.error) { setError(electionsResponse.error.message); setLoading(false); return; }
-    setRows((electionsResponse.data ?? []) as Election[]);
+    const loadedRows = (electionsResponse.data ?? []) as Election[];
+    setRows(loadedRows);
+    if (selectedElectionId) setSelectedElection(loadedRows.find((row) => row.id === selectedElectionId) ?? null);
     setStates((statesResponse.data ?? []) as State[]);
     setLoading(false);
   }
 
-  useEffect(() => { void load(); }, []);
+  useEffect(() => { void load(); }, [selectedElectionId]);
 
   useEffect(() => {
     if (!supabase || !stateId || !type) { setLgas([]); return; }
@@ -197,7 +200,7 @@ export function ElectionProfile({ selectedElectionId, onElectionSelect, onBackTo
     });
   }, [year, category, type, stateId, lgaId, wardId, pollingUnitId, rows]);
 
-  const election = rows.find((row) => row.id === selected);
+  const election = selectedElection ?? rows.find((row) => row.id === selected);
   const relatedElections = election ? rows.filter((row) => row.id !== election.id && categoryOf(row.election_type) === categoryOf(election.election_type)).slice(0, 3) : [];
   const otherElections = election ? rows.filter((row) => row.id !== election.id && categoryOf(row.election_type) !== categoryOf(election.election_type)).slice(0, 3) : [];
   const selectedState = states.find((item) => item.id === stateId);
