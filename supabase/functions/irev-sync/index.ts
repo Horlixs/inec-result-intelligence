@@ -332,97 +332,225 @@ async function discoverApiWardStructure(
   irevStateId: number,
   diagnostics: Array<Record<string, unknown>>,
 ): Promise<number> {
-  const structure = await apiGet(
+  // IReV exposes a richer election-level hierarchy at /elections/{id}/lga.
+  // Unlike the state-scoped route, this response carries the actual LGA
+  // object/name alongside its wards. Use it first so current elections whose
+  // state-scoped rows only expose an opaque LGA object-id can still be mapped
+  // into our canonical geography.
+  let structure = await apiGet(
     base,
-    "/elections/" + encodeURIComponent(electionExternalId) + "/lga/state/" + irevStateId,
+    "/elections/" + encodeURIComponent(electionExternalId) + "/lga",
     diagnostics,
   );
-  const responseRows = apiRows(structure);
-  if (!responseRows.length) return 0;
 
-  const state = await supabaseRest(
-    "states?select=id&code=eq." + encodeURIComponent(String(irevStateId).padStart(2, "0")) + "&limit=1",
-    { method: "GET" },
-  );
-  const stateRows = Array.isArray(state.body) ? state.body as Array<Record<string, unknown>> : [];
-  const stateUuid = stateRows[0]?.id;
-  if (!stateUuid) return 0;
-
-  // The current IReV API response is grouped as { data: [{ wards: [...] }] }.
-  // The ward records carry the numeric LGA identity; they do not repeat the
-  // canonical LGA name at the wrapper level. Flatten the response first, then
-  // resolve each ward's LGA through the durable irev_lga_id mapping.
-  const wards = responseRows.flatMap((row) =>
-    Array.isArray(row.wards)
-      ? row.wards.filter((value): value is Record<string, unknown> => !!value && typeof value === "object")
-      : [],
-  );
+  let rows = apiRows(structure);
+  if (!rows.length) {
+    structure = await apiGet(
+      base,
+      "/elections/" + encodeURIComponent(electionExternalId) + "/lga/state/" + irevStateId,
+      diagnostics,
+    );
+    rows = apiRows(structure);
+  }
+  if (!rows.length) return 0;
 
   let queued = 0;
-  const canonicalLgas = new Map<string, string>();
+  const stateCache = new Map<string, string>();
+  const lgaCache = new Map<string, string>();
 
-  for (const wardRaw of wards) {
-    const wardName = String(wardRaw.ward_name ?? wardRaw.name ?? "").trim();
-    const wardOid = objectId(wardRaw._id);
-    const lgaNumericId = Number(wardRaw.lga_id);
-    if (!wardName || !wardOid || !Number.isFinite(lgaNumericId)) continue;
+  const stateIdForName = async (stateName: string): Promise<string | null> => {
+    const normalized = stateName.trim();
+    if (!normalized) return null;
+    const cached = stateCache.get(normalized.toUpperCase());
+    if (cached) return cached;
 
-    const lgaKey = String(lgaNumericId);
-    let canonicalLgaId = canonicalLgas.get(lgaKey);
+    const lookup = await supabaseRest(
+      "states?select=id&name=eq." + encodeURIComponent(normalized) + "&limit=1",
+      { method: "GET" },
+    );
+    const stateRows = Array.isArray(lookup.body) ? lookup.body as Array<Record<string, unknown>> : [];
+    const id = stateRows[0]?.id;
+    if (id) stateCache.set(normalized.toUpperCase(), String(id));
+    return id ? String(id) : null;
+  };
+
+  // Some elections return a state object/name on the LGA block; for the
+  // fallback state-scoped route, the election's numeric state id is also
+  // useful as a last-resort lookup against the existing 1..37 state codes.
+  const fallbackState = await supabaseRest(
+    "states?select=id,code&code=eq." + encodeURIComponent(String(irevStateId).padStart(2, "0")) + "&limit=1",
+    { method: "GET" },
+  );
+  const fallbackStateRows = Array.isArray(fallbackState.body)
+    ? fallbackState.body as Array<Record<string, unknown>> : [];
+  const fallbackStateUuid = fallbackStateRows[0]?.id ? String(fallbackStateRows[0].id) : null;
+
+  for (const lgaRaw of rows) {
+    const nestedLga = isRecord(lgaRaw.lga) ? lgaRaw.lga : null;
+    const nestedState = isRecord(lgaRaw.state) ? lgaRaw.state : null;
+    const lgaState = nestedLga && isRecord(nestedLga.state) ? nestedLga.state : null;
+
+    const lgaName = String(
+      nestedLga?.name ??
+      nestedLga?.lga_name ??
+      lgaRaw.lga_name ??
+      lgaRaw.name ??
+      "",
+    ).trim();
+
+    const lgaNumericId = Number(
+      nestedLga?.lga_id ??
+      lgaRaw.lga_id ??
+      nestedLga?.id ??
+      lgaRaw.id,
+    );
+    const lgaOid = objectId(
+      nestedLga?._id ??
+      (typeof lgaRaw.lga === "string" ? lgaRaw.lga : null) ??
+      lgaRaw.lga_oid,
+    );
+
+    const stateName = String(
+      nestedState?.name ??
+      lgaState?.name ??
+      (typeof lgaRaw.state === "string" ? lgaRaw.state : "") ??
+      "",
+    ).trim();
+
+    let stateUuid = stateName ? await stateIdForName(stateName) : null;
+    if (!stateUuid) stateUuid = fallbackStateUuid;
+    if (!stateUuid) continue;
+
+    if (!lgaName) {
+      // The state-scoped API sometimes returns only an opaque LGA object-id.
+      // Do not manufacture a geography name; fall back to ward-level matching
+      // below only when the canonical ward already exists.
+      const wards = Array.isArray(lgaRaw.wards) ? lgaRaw.wards : [];
+      for (const wardValue of wards) {
+        if (!wardValue || typeof wardValue !== "object") continue;
+        const wardRaw = wardValue as Record<string, unknown>;
+        const wardName = String(wardRaw.ward_name ?? wardRaw.name ?? "").trim();
+        const wardOid = objectId(wardRaw._id);
+        if (!wardName || !wardOid) continue;
+
+        const wardLookup = await supabaseRest(
+          "wards?select=id,lga_id&irev_ward_oid=eq." + encodeURIComponent(wardOid) + "&limit=1",
+          { method: "GET" },
+        );
+        const wardRows = Array.isArray(wardLookup.body) ? wardLookup.body as Array<Record<string, unknown>> : [];
+        const canonicalWardId = wardRows[0]?.id;
+        const canonicalLgaId = wardRows[0]?.lga_id;
+        if (!canonicalWardId || !canonicalLgaId) continue;
+
+        const job = await supabaseRest("irev_ward_sync_jobs?on_conflict=election_id,ward_id", {
+          method: "POST",
+          headers: { Prefer: "resolution=merge-duplicates,return=minimal" },
+          body: JSON.stringify({
+            election_id: electionId,
+            ward_id: canonicalWardId,
+            status: "queued",
+            available_at: new Date().toISOString(),
+          }),
+        });
+        if (job.response.ok) queued++;
+      }
+      continue;
+    }
+
+    const lgaKey = String(stateUuid) + "/" + lgaName.toUpperCase();
+    let canonicalLgaId = lgaCache.get(lgaKey) ?? null;
 
     if (!canonicalLgaId) {
       const lookup = await supabaseRest(
         "lgas?select=id&state_id=eq." + encodeURIComponent(String(stateUuid)) +
-          "&irev_lga_id=eq." + encodeURIComponent(String(lgaNumericId)) + "&limit=1",
+          "&name=eq." + encodeURIComponent(lgaName) + "&limit=1",
         { method: "GET" },
       );
       const lgaRows = Array.isArray(lookup.body) ? lookup.body as Array<Record<string, unknown>> : [];
-      canonicalLgaId = lgaRows[0]?.id;
-      if (canonicalLgaId) canonicalLgas.set(lgaKey, String(canonicalLgaId));
+      canonicalLgaId = lgaRows[0]?.id ? String(lgaRows[0].id) : null;
+
+      if (!canonicalLgaId) {
+        const created = await supabaseRest("lgas", {
+          method: "POST",
+          headers: { Prefer: "return=representation" },
+          body: JSON.stringify({
+            state_id: stateUuid,
+            name: lgaName,
+            irev_lga_id: Number.isFinite(lgaNumericId) ? lgaNumericId : null,
+          }),
+        });
+        const createdRows = Array.isArray(created.body) ? created.body as Array<Record<string, unknown>> : [];
+        canonicalLgaId = createdRows[0]?.id ? String(createdRows[0].id) : null;
+      } else if (Number.isFinite(lgaNumericId) || lgaOid) {
+        await supabaseRest(
+          "lgas?id=eq." + encodeURIComponent(canonicalLgaId),
+          {
+            method: "PATCH",
+            headers: { Prefer: "return=minimal" },
+            body: JSON.stringify({
+              ...(Number.isFinite(lgaNumericId) ? { irev_lga_id: lgaNumericId } : {}),
+              ...(lgaOid ? { irev_lga_oid: lgaOid } : {}),
+            }),
+          },
+        );
+      }
+      if (canonicalLgaId) lgaCache.set(lgaKey, canonicalLgaId);
     }
 
     if (!canonicalLgaId) continue;
 
-    const wardLookup = await supabaseRest(
-      "wards?select=id&lga_id=eq." + encodeURIComponent(String(canonicalLgaId)) +
-        "&irev_ward_oid=eq." + encodeURIComponent(wardOid) + "&limit=1",
-      { method: "GET" },
-    );
-    const wardRows = Array.isArray(wardLookup.body) ? wardLookup.body as Array<Record<string, unknown>> : [];
-    let canonicalWardId = wardRows[0]?.id;
+    const wards = Array.isArray(lgaRaw.wards) ? lgaRaw.wards : [];
+    for (const wardValue of wards) {
+      if (!wardValue || typeof wardValue !== "object") continue;
+      const wardRaw = wardValue as Record<string, unknown>;
+      const wardName = String(wardRaw.ward_name ?? wardRaw.name ?? "").trim();
+      const wardOid = objectId(wardRaw._id);
+      if (!wardName || !wardOid) continue;
 
-    if (!canonicalWardId) {
-      const byName = await supabaseRest(
+      const wardLookup = await supabaseRest(
         "wards?select=id&lga_id=eq." + encodeURIComponent(String(canonicalLgaId)) +
-          "&name=eq." + encodeURIComponent(wardName) + "&limit=1",
+          "&irev_ward_oid=eq." + encodeURIComponent(wardOid) + "&limit=1",
         { method: "GET" },
       );
-      const byNameRows = Array.isArray(byName.body) ? byName.body as Array<Record<string, unknown>> : [];
-      canonicalWardId = byNameRows[0]?.id;
-    }
+      const wardRows = Array.isArray(wardLookup.body) ? wardLookup.body as Array<Record<string, unknown>> : [];
+      let canonicalWardId = wardRows[0]?.id;
 
-    const wardNumericId = Number(wardRaw.ward_id ?? wardRaw.id);
-    if (canonicalWardId) {
-      await supabaseRest("wards?id=eq." + encodeURIComponent(String(canonicalWardId)), {
-        method: "PATCH",
-        headers: { Prefer: "return=minimal" },
-        body: JSON.stringify({
-          irev_ward_id: Number.isFinite(wardNumericId) ? wardNumericId : null,
-          irev_ward_oid: wardOid,
-        }),
-      });
+      if (!canonicalWardId) {
+        const byName = await supabaseRest(
+          "wards?select=id&lga_id=eq." + encodeURIComponent(String(canonicalLgaId)) +
+            "&name=eq." + encodeURIComponent(wardName) + "&limit=1",
+          { method: "GET" },
+        );
+        const byNameRows = Array.isArray(byName.body) ? byName.body as Array<Record<string, unknown>> : [];
+        canonicalWardId = byNameRows[0]?.id;
+      }
 
-      const job = await supabaseRest("irev_ward_sync_jobs?on_conflict=election_id,ward_id", {
-        method: "POST",
-        headers: { Prefer: "resolution=merge-duplicates,return=minimal" },
-        body: JSON.stringify({
-          election_id: electionId,
-          ward_id: canonicalWardId,
-          status: "queued",
-          available_at: new Date().toISOString(),
-        }),
-      });
-      if (job.response.ok) queued++;
+      const wardNumericId = Number(wardRaw.ward_id ?? wardRaw.id);
+      if (canonicalWardId) {
+        await supabaseRest(
+          "wards?id=eq." + encodeURIComponent(String(canonicalWardId)),
+          {
+            method: "PATCH",
+            headers: { Prefer: "return=minimal" },
+            body: JSON.stringify({
+              irev_ward_id: Number.isFinite(wardNumericId) ? wardNumericId : null,
+              irev_ward_oid: wardOid,
+            }),
+          },
+        );
+
+        const job = await supabaseRest("irev_ward_sync_jobs?on_conflict=election_id,ward_id", {
+          method: "POST",
+          headers: { Prefer: "resolution=merge-duplicates,return=minimal" },
+          body: JSON.stringify({
+            election_id: electionId,
+            ward_id: canonicalWardId,
+            status: "queued",
+            available_at: new Date().toISOString(),
+          }),
+        });
+        if (job.response.ok) queued++;
+      }
     }
   }
 
