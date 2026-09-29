@@ -1,6 +1,8 @@
 import { Activity, BarChart3, Database, FileCheck2, LayoutDashboard, Menu, RefreshCw, Search, Settings2, ShieldCheck, Sparkles, X } from "lucide-react";
 import { useState } from "react";
 import { ElectionProfile } from "./components/ElectionProfile";
+import { ElectionList } from "./components/ElectionList";
+import { RecentElections } from "./components/RecentElections";
 import { PipelineRunner } from "./components/PipelineRunner";
 import { SystemValidator } from "./components/SystemValidator";
 
@@ -82,7 +84,22 @@ export default function App(_props: AppProps) {
                 </div>
               </div>
             </section>
-            <ElectionProfile />
+
+            {active === "Overview" ? (
+              <>
+                <div className="[&>section>div:first-child>div:last-child]:hidden">
+                  <ElectionProfile />
+                </div>
+                <RecentElections onSelect={() => setActive("Elections")} />
+              </>
+            ) : active === "Elections" ? (
+              <ElectionList />
+            ) : (
+              <div className="rounded-2xl border border-zinc-800/60 bg-zinc-900/35 p-12 text-center">
+                <p className="text-sm font-medium text-zinc-300">{active}</p>
+                <p className="mt-2 text-xs text-zinc-600">This workspace is ready for the corresponding evidence module.</p>
+              </div>
+            )}
           </main>
         </div>
       </div>
