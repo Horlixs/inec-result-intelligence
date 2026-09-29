@@ -4,10 +4,8 @@ const ORIGIN = "https://inecelectionresults.ng";
 const CURRENT_IREV_ORIGIN = "https://irev.inecnigeria.org";
 const UA = "INEC-Result-Intelligence/1.0 source-collector";
 const API_BASES = [
-  // Current IReV API hosts. lv001-g no longer resolves from the Edge
-  // Function runtime, so keep it out of the active rotation.
+  // DigitalOcean hosts the current IReV API used by the public frontend.
   "https://dolphin-app-sleqh.ondigitalocean.app/api/v1",
-  "https://lv001-r.inecelectionresults.ng/api/v1",
 ];
 const PUBLIC_INEC_CLIENT_KEY = "4SXkHM7Amb1SbF4C8do6816dmbbwqPp7akRbrmcV";
 const KNOWN_ELECTION_TYPE_IDS = [
@@ -672,21 +670,31 @@ Deno.serve(async request => {
             }
           }
 
+          // The election-level /lga endpoint already returns the full hierarchy.
+          // Calling it once is important: the previous implementation issued the
+          // same expensive request once per candidate state, which amplified CPU
+          // and memory usage inside the Edge Function.
+          const fallbackStateId = stateIdFromApi ?? parsedStateId ?? 1;
           for (const base of API_BASES) {
-            for (let offset = 0; offset < candidateStateIds.length && queuedWardJobs === 0; offset += 6) {
-              const batch = candidateStateIds.slice(offset, offset + 6);
-              const results = await Promise.all(
-                batch.map((candidateStateId) =>
-                  discoverApiWardStructure(base, apiElectionId, String(electionId), candidateStateId, geographyDiagnostics),
-                ),
-              );
-              queuedWardJobs = results.reduce((sum, value) => sum + value, 0);
-            }
+            queuedWardJobs = await discoverApiWardStructure(
+              base,
+              apiElectionId,
+              String(electionId),
+              fallbackStateId,
+              geographyDiagnostics,
+            );
             if (queuedWardJobs > 0) break;
           }
         }
 
-        const resultLinks = queuedWardJobs === 0 ? await crawlElection(election.source_url) : [];
+        // IReV elections are API-backed. Do not fall back to crawling the SPA
+        // when hierarchy discovery returns zero; that crawl can consume hundreds
+        // of HTML requests and exhaust the Edge Function resource budget.
+        const resultLinks = election.external_id.startsWith("irev:")
+          ? []
+          : queuedWardJobs === 0
+            ? await crawlElection(election.source_url)
+            : [];
         const sheetRows = resultLinks.map(url => ({ election_id: electionId, source_url: url, source_external_id: url, status: "discovered", evidence_status: "remote_only", storage_policy: "ephemeral" }));
         if (sheetRows.length) {
           const result = await supabaseRest("result_sheets?on_conflict=election_id,source_url", { method: "POST", headers: { Prefer: "resolution=merge-duplicates,return=minimal" }, body: JSON.stringify(sheetRows) });

@@ -9,9 +9,7 @@ const MAX_ATTEMPTS = 5;
 const WORKER_ID = `irev-refresh:${crypto.randomUUID()}`;
 
 const IREV_API_BASES = [
-  "https://lv001-g.inecelectionresults.ng/api/v1",
   "https://dolphin-app-sleqh.ondigitalocean.app/api/v1",
-  "https://lv001-r.inecelectionresults.ng/api/v1",
 ];
 const IREV_PUBLIC_KEY = "4SXkHM7Amb1SbF4C8do6816dmbbwqPp7akRbrmcV";
 const WARD_MAX_ATTEMPTS = 5;
