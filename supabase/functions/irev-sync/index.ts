@@ -501,16 +501,35 @@ Deno.serve(async request => {
         let queuedWardJobs = 0;
         if (election.external_id.startsWith("irev:")) {
           const apiElectionId = election.external_id.slice("irev:".length);
+          const electionStateId = Number((election as unknown as Record<string, unknown>).irev_state_id);
+          const stateIdFromApi = Number.isFinite(electionStateId) && electionStateId >= 1 && electionStateId <= 37
+            ? electionStateId
+            : null;
           const stateIdMatch = election.name.match(/(?:^|[-\\s])(\\d{2})[-\\s]/);
-          const parsedStateId = stateIdMatch ? Number(stateIdMatch[1]) : null;
-          const stateId = parsedStateId && parsedStateId >= 1 && parsedStateId <= 37 ? parsedStateId : null;
-          if (stateId) {
-            for (const base of API_BASES) {
-              queuedWardJobs = await discoverApiWardStructure(base, apiElectionId, String(electionId), stateId);
-              if (queuedWardJobs > 0) break;
+          const stateIdFromName = stateIdMatch ? Number(stateIdMatch[1]) : null;
+          const parsedStateId = stateIdFromName && stateIdFromName >= 1 && stateIdFromName <= 37 ? stateIdFromName : null;
+          const candidateStateIds = stateIdFromApi
+            ? [stateIdFromApi]
+            : parsedStateId
+              ? [parsedStateId]
+              : KNOWN_STATE_IDS;
+
+          // Some recent IReV elections are constituency/LGA scoped and do not
+          // expose a state id in the election name. The API geography endpoint
+          // remains authoritative, so probe the bounded Nigerian state list
+          // until the election returns a mapped hierarchy.
+          for (const base of API_BASES) {
+            for (let offset = 0; offset < candidateStateIds.length && queuedWardJobs === 0; offset += 6) {
+              const batch = candidateStateIds.slice(offset, offset + 6);
+              const results = await Promise.all(
+                batch.map((candidateStateId) =>
+                  discoverApiWardStructure(base, apiElectionId, String(electionId), candidateStateId),
+                ),
+              );
+              queuedWardJobs = results.reduce((sum, value) => sum + value, 0);
             }
+            if (queuedWardJobs > 0) break;
           }
-        }
 
         const resultLinks = queuedWardJobs === 0 ? await crawlElection(election.source_url) : [];
         const sheetRows = resultLinks.map(url => ({ election_id: electionId, source_url: url, source_external_id: url, status: "discovered", evidence_status: "remote_only", storage_policy: "ephemeral" }));
