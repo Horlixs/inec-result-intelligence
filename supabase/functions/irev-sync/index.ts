@@ -279,12 +279,12 @@ function documentUrl(row: Record<string, unknown>): string | null {
     row.path,
   ];
   for (const candidate of candidates) {
-    if (typeof candidate === "string" && /^https?:\\/\\//i.test(candidate)) return candidate;
+    if (typeof candidate === "string" && /^https?:\/\//i.test(candidate)) return candidate;
     if (candidate && typeof candidate === "object") {
       const obj = candidate as Record<string, unknown>;
       for (const key of ["url", "file_url", "document_url", "path", "src"]) {
         const value = obj[key];
-        if (typeof value === "string" && /^https?:\\/\\//i.test(value)) return value;
+        if (typeof value === "string" && /^https?:\/\//i.test(value)) return value;
       }
     }
   }
