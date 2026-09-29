@@ -56,22 +56,26 @@ async function claimJob() {
   return data?.[0] ?? null;
 }
 
-async function finishJob(jobId: string, success: boolean, errorMessage?: string) {
+async function finishJob(jobId: string, attempts: number, success: boolean, errorMessage?: string) {
+  const now = new Date();
+  const retryable = !success && attempts < MAX_ATTEMPTS;
+
   const update = success
     ? {
         status: "completed",
         locked_at: null,
         locked_by: null,
         last_error: null,
-        completed_at: new Date().toISOString(),
-        updated_at: new Date().toISOString(),
+        completed_at: now.toISOString(),
+        updated_at: now.toISOString(),
       }
     : {
-        status: "failed",
+        status: retryable ? "queued" : "failed",
         locked_at: null,
         locked_by: null,
         last_error: errorMessage ?? "Unknown processing error",
-        updated_at: new Date().toISOString(),
+        available_at: new Date(now.getTime() + 15 * 60_000).toISOString(),
+        updated_at: now.toISOString(),
       };
 
   const { error } = await supabase
@@ -105,7 +109,7 @@ Deno.serve(async request => {
           result_sheet_id: job.result_sheet_id,
         });
 
-        await finishJob(job.job_id, Boolean(result?.ok), result?.error);
+        await finishJob(job.job_id, job.attempts, Boolean(result?.ok), result?.error);
         if (result?.ok) processed++;
         else failed++;
       } catch (error) {
@@ -113,6 +117,7 @@ Deno.serve(async request => {
         try {
           await finishJob(
             job.job_id,
+            job.attempts,
             false,
             error instanceof Error ? error.message : String(error),
           );
