@@ -195,6 +195,8 @@ export function ElectionProfile(_props: ElectionProfileProps) {
   }, [year, category, type, stateId, lgaId, wardId, pollingUnitId, rows]);
 
   const election = rows.find((row) => row.id === selected);
+  const relatedElections = election ? rows.filter((row) => row.id !== election.id && categoryOf(row.election_type) === categoryOf(election.election_type)).slice(0, 3) : [];
+  const otherElections = election ? rows.filter((row) => row.id !== election.id && categoryOf(row.election_type) !== categoryOf(election.election_type)).slice(0, 3) : [];
   const selectedState = states.find((item) => item.id === stateId);
   const selectedLga = lgas.find((item) => item.id === lgaId);
   const selectedWard = wards.find((item) => item.id === wardId);
@@ -269,7 +271,7 @@ export function ElectionProfile(_props: ElectionProfileProps) {
             <div key={groupYear}>
               <div className="mb-2 flex items-center gap-3"><span className="font-display text-sm font-semibold text-zinc-300">{groupYear}</span><span className="h-px flex-1 bg-zinc-800/60" /><span className="text-[10px] uppercase tracking-[0.14em] text-zinc-700">{groupRows.length} election{groupRows.length === 1 ? "" : "s"}</span></div>
               <div className="grid gap-2 sm:grid-cols-2 xl:grid-cols-3">
-                {groupRows.map((row) => <button key={row.id} onClick={() => { setSelected(row.id); setTab("overview"); }} className="group flex min-w-0 items-center justify-between gap-3 rounded-xl border border-zinc-800/60 bg-zinc-950/35 px-3.5 py-3 text-left transition-all duration-200 hover:border-zinc-700 hover:bg-zinc-900">
+                {groupRows.map((row) => <button key={row.id} onClick={() => { setSelected(row.id); setTab("results"); }} className="group flex min-w-0 items-center justify-between gap-3 rounded-xl border border-zinc-800/60 bg-zinc-950/35 px-3.5 py-3 text-left transition-all duration-200 hover:border-zinc-700 hover:bg-zinc-900">
                   <span className="min-w-0"><span className="block truncate font-display text-sm font-semibold text-zinc-200">{humanElectionType(row.election_type)}</span><span className="mt-0.5 block truncate text-[11px] text-zinc-600">{row.name}</span></span><ArrowUpRight size={14} className="shrink-0 text-zinc-700 group-hover:text-zinc-300" />
                 </button>)}
               </div>
@@ -279,6 +281,7 @@ export function ElectionProfile(_props: ElectionProfileProps) {
     </div>
 
     <div className="mt-5 min-w-0">
+      {election && <div className="mb-4 flex items-center gap-2 text-xs"><button onClick={() => setSelected("")} className="text-zinc-500 hover:text-zinc-200">Elections</button><ChevronRight size={12} className="text-zinc-700" /><span className="truncate text-zinc-300">{election.name}</span></div>}
       {error && <div className="mb-5 flex items-start gap-3 rounded-2xl border border-amber-500/20 bg-amber-500/5 p-4 text-sm text-amber-200"><XCircle size={18} className="mt-0.5 shrink-0" /><div><p className="font-medium">Data connection notice</p><p className="mt-1 text-xs text-amber-200/60">{error}</p></div></div>}
       {election ? <>
         <div className="rounded-2xl border border-zinc-800/60 bg-zinc-900/35 p-5 sm:p-6">
@@ -313,7 +316,11 @@ export function ElectionProfile(_props: ElectionProfileProps) {
         {tab === "results" && <div className="mt-5 rounded-2xl border border-zinc-800/60 bg-zinc-900/40 p-6"><p className="text-[10px] font-semibold uppercase tracking-[0.18em] text-zinc-600">Result evidence</p><div className="mt-3 flex items-end justify-between gap-4"><div><h3 className="font-display text-xl font-semibold">IReV result-sheet coverage</h3><p className="mt-1 text-xs text-zinc-600">Remote evidence discovered by the collector.</p></div><p className="font-display text-4xl font-semibold">{pct(stats?.result_sheets_expected, stats?.result_sheets_uploaded)}%</p></div><div className="mt-6 h-2 overflow-hidden rounded-full bg-zinc-800"><div className="h-full rounded-full bg-zinc-200 transition-all duration-500" style={{ width: `${pct(stats?.result_sheets_expected, stats?.result_sheets_uploaded)}%` }} /></div><p className="mt-3 text-xs text-zinc-600">{num(stats?.result_sheets_uploaded)} of {num(stats?.result_sheets_expected)} sheets recorded.</p></div>}
 
         {(tab === "sources" || tab === "candidates" || tab === "timeline") && (tab === "sources" ? sources.length ? <div className="mt-5 overflow-hidden rounded-2xl border border-zinc-800/60 bg-zinc-900/40">{sources.map((source) => <a key={source.id} href={source.url} target="_blank" rel="noreferrer" className="flex items-center justify-between gap-4 border-b border-zinc-800/60 p-4 transition-all duration-200 hover:bg-zinc-800/30 last:border-0"><div><p className="text-sm font-medium text-zinc-200">{source.title}</p><p className="mt-1 text-xs text-zinc-600">{source.source_type} · {fmt(source.published_at)}</p></div><ExternalLink size={15} className="shrink-0 text-zinc-600" /></a>)}</div> : <div className="mt-5"><EmptyState label="source" /></div> : <div className="mt-5"><EmptyState label={tab} /></div>)}
-      </> : <div className="rounded-2xl border border-zinc-800/60 bg-zinc-900/30 p-12 text-center"><FileImage className="mx-auto text-zinc-700" size={32} /><h3 className="mt-4 font-display text-lg font-semibold">No election selected</h3><p className="mt-2 text-sm text-zinc-600">Choose a year, category and election type above, then narrow by geography if needed.</p></div>}
+        <div className="mt-6 grid gap-5 lg:grid-cols-2">
+          <div className="rounded-2xl border border-zinc-800/60 bg-zinc-900/35 p-5"><p className="text-[10px] font-semibold uppercase tracking-[0.18em] text-zinc-600">Explore related</p><h3 className="mt-2 font-display text-lg font-semibold text-zinc-100">More elections in this area</h3><div className="mt-4 space-y-2">{relatedElections.map((item) => <button key={item.id} onClick={() => { setSelected(item.id); setTab("results"); }} className="flex w-full items-center justify-between rounded-xl border border-zinc-800/60 bg-zinc-950/35 px-3.5 py-3 text-left hover:border-zinc-700 hover:bg-zinc-900"><span><span className="block text-sm font-medium text-zinc-200">{humanElectionType(item.election_type)}</span><span className="text-[11px] text-zinc-600">{item.name}</span></span><ArrowUpRight size={14} className="text-zinc-700" /></button>)}</div></div>
+          <div className="rounded-2xl border border-zinc-800/60 bg-zinc-900/35 p-5"><p className="text-[10px] font-semibold uppercase tracking-[0.18em] text-zinc-600">Explore others</p><h3 className="mt-2 font-display text-lg font-semibold text-zinc-100">Other elections</h3><div className="mt-4 space-y-2">{otherElections.map((item) => <button key={item.id} onClick={() => { setSelected(item.id); setTab("results"); }} className="flex w-full items-center justify-between rounded-xl border border-zinc-800/60 bg-zinc-950/35 px-3.5 py-3 text-left hover:border-zinc-700 hover:bg-zinc-900"><span><span className="block text-sm font-medium text-zinc-200">{humanElectionType(item.election_type)}</span><span className="text-[11px] text-zinc-600">{item.name}</span></span><ArrowUpRight size={14} className="text-zinc-700" /></button>)}</div></div>
+        </div>
+      </> : <div className="rounded-2xl border border-zinc-800/60 bg-zinc-900/30 p-12 text-center"><FileImage className="mx-auto text-zinc-700" size={32} /><h3 className="mt-4 font-display text-lg font-semibold">No election selected</h3><p className="mt-2 text-sm text-zinc-600">Choose an election from the directory to view its result evidence.</p></div>
     </div>
   </section>;
 }
