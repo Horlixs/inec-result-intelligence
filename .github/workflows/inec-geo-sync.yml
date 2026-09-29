@@ -22,9 +22,20 @@ jobs:
         run: |
           test -n "$SUPABASE_URL"
           test -n "$SUPABASE_PUBLISHABLE_KEY"
+          echo "Syncing states, LGAs and wards..."
           curl --fail-with-body --silent --show-error \
             -X POST "$SUPABASE_URL/functions/v1/inec-geo-sync" \
             -H "Authorization: Bearer $SUPABASE_PUBLISHABLE_KEY" \
             -H "apikey: $SUPABASE_PUBLISHABLE_KEY" \
             -H "Content-Type: application/json" \
-            -d '{}'
+            -d '{"mode":"hierarchy"}'
+
+          for state_code in $(seq -w 1 37); do
+            echo "Syncing polling units for state $state_code..."
+            curl --fail-with-body --silent --show-error \
+              -X POST "$SUPABASE_URL/functions/v1/inec-geo-sync" \
+              -H "Authorization: Bearer $SUPABASE_PUBLISHABLE_KEY" \
+              -H "apikey: $SUPABASE_PUBLISHABLE_KEY" \
+              -H "Content-Type: application/json" \
+              -d "{\"mode\":\"polling-units\",\"stateCode\":\"$state_code\"}"
+          done
