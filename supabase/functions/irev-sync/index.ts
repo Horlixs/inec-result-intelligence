@@ -5,7 +5,7 @@ const CURRENT_IREV_ORIGIN = "https://irev.inecnigeria.org";
 const UA = "INEC-Result-Intelligence/1.0 source-collector";
 const API_BASES = [
   "https://dolphin-app-sleqh.ondigitalocean.app/api/v1",
-  "https://lv001-g.inecelectionresults.ng/api/v1",
+  "https://lv001-r.inecelectionresults.ng/api/v1",
 ];
 const PUBLIC_INEC_CLIENT_KEY = "4SXkHM7Amb1SbF4C8do6816dmbbwqPp7akRbrmcV";
 const KNOWN_ELECTION_TYPE_IDS = [
@@ -125,31 +125,77 @@ async function discoverFromIrevApi() {
     }
   };
 
-  const requestElectionList = async (base: string, electionTypeId: string, stateId: number) => {
-    const url = base + "/elections?" + new URLSearchParams({ election_type: electionTypeId, state_id: String(stateId) }).toString();
+  const requestElectionList = async (base: string, electionTypeId: string, stateId?: number) => {
+    const params = new URLSearchParams({ election_type: electionTypeId });
+    if (stateId != null) params.set("state_id", String(stateId));
+    const url = base + "/elections?" + params.toString();
     try {
       const controller = new AbortController();
-      const timeout = setTimeout(() => controller.abort(), 4000);
-      const response = await fetch(url, { method: "GET", signal: controller.signal, headers: { "user-agent": UA, accept: "application/json, text/plain, */*", origin: ORIGIN, referer: ORIGIN + "/", "x-api-key": PUBLIC_INEC_CLIENT_KEY, "x-api-rt": String(Date.now()) } });
+      const timeout = setTimeout(() => controller.abort(), 8000);
+      const response = await fetch(url, {
+        method: "GET",
+        signal: controller.signal,
+        headers: {
+          "user-agent": UA,
+          accept: "application/json, text/plain, */*",
+          origin: ORIGIN,
+          referer: ORIGIN + "/",
+          "x-api-key": PUBLIC_INEC_CLIENT_KEY,
+          "x-api-rt": String(Date.now()),
+        },
+      });
       clearTimeout(timeout);
       const body = await response.text();
-      attempts.push({ base, endpoint: "elections", election_type: electionTypeId, state_id: stateId, status: response.status, content_type: response.headers.get("content-type"), length: body.length, preview: body.slice(0, 160) });
-      if (!response.ok || !body) return;
+      attempts.push({
+        base,
+        endpoint: "elections",
+        election_type: electionTypeId,
+        ...(stateId == null ? {} : { state_id: stateId }),
+        status: response.status,
+        content_type: response.headers.get("content-type"),
+        length: body.length,
+        preview: body.slice(0, 160),
+      });
+      if (!response.ok || !body) return 0;
       let payload: unknown;
-      try { payload = JSON.parse(body); } catch { return; }
-      const rawRows = Array.isArray(payload) ? payload : payload && typeof payload === "object" && Array.isArray((payload as Record<string, unknown>).data) ? (payload as Record<string, unknown>).data : [];
+      try { payload = JSON.parse(body); } catch { return 0; }
+      const rawRows = Array.isArray(payload)
+        ? payload
+        : payload && typeof payload === "object" && Array.isArray((payload as Record<string, unknown>).data)
+          ? (payload as Record<string, unknown>).data
+          : [];
       recordRows(rawRows);
+      return rawRows.length;
     } catch (error) {
-      attempts.push({ base, endpoint: "elections", election_type: electionTypeId, state_id: stateId, error: error instanceof Error ? error.message : String(error) });
+      attempts.push({
+        base,
+        endpoint: "elections",
+        election_type: electionTypeId,
+        ...(stateId == null ? {} : { state_id: stateId }),
+        error: error instanceof Error ? error.message : String(error),
+      });
+      return 0;
     }
   };
 
   for (const base of API_BASES) {
     const electionTypeIds = await discoverElectionTypeIds(base, attempts);
-    const jobs: Array<{ electionTypeId: string; stateId: number }> = [];
-    for (const electionTypeId of electionTypeIds) for (const stateId of KNOWN_STATE_IDS) jobs.push({ electionTypeId, stateId });
-    for (let offset = 0; offset < jobs.length; offset += ELECTION_DISCOVERY_CONCURRENCY) {
-      await Promise.all(jobs.slice(offset, offset + ELECTION_DISCOVERY_CONCURRENCY).map(job => requestElectionList(base, job.electionTypeId, job.stateId)));
+    // The IReV API already exposes the complete election collection when queried
+    // by election type. Use that authoritative route first; only fall back to
+    // state-scoped requests when a type returns no rows. This keeps discovery
+    // fast enough for scheduled runs and prevents the sync from timing out
+    // before current elections are persisted.
+    for (const electionTypeId of electionTypeIds) {
+      const count = await requestElectionList(base, electionTypeId);
+      if (count === 0) {
+        const stateJobs = KNOWN_STATE_IDS.map((stateId) => ({ electionTypeId, stateId }));
+        for (let offset = 0; offset < stateJobs.length; offset += ELECTION_DISCOVERY_CONCURRENCY) {
+          await Promise.all(
+            stateJobs.slice(offset, offset + ELECTION_DISCOVERY_CONCURRENCY)
+              .map((job) => requestElectionList(base, job.electionTypeId, job.stateId)),
+          );
+        }
+      }
     }
     if (found.size > 0) break;
   }
