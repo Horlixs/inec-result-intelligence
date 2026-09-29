@@ -1,5 +1,5 @@
 import { Activity, BarChart3, Database, FileCheck2, LayoutDashboard, Menu, RefreshCw, Settings2, ShieldCheck, Sparkles, X } from "lucide-react";
-import { useState, type ReactNode } from "react";
+import { useState } from "react";
 import { PipelineRunner } from "./components/PipelineRunner";
 import { SystemValidator } from "./components/SystemValidator";
 
@@ -13,7 +13,7 @@ const navigation = [
 interface AppShellProps {
   pathname: string;
   onNavigate: (to: string) => void;
-  children: ReactNode;
+  children: any;
 }
 
 export function AppShell({ pathname, onNavigate, children }: AppShellProps) {
