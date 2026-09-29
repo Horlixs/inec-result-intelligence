@@ -324,7 +324,7 @@ async function discoverApiWardStructure(
 
     const lgaId = objectId(lga._id);
     const lgaNumericId = Number(lga.lga_id ?? lga.id);
-    const lgaFilter = lgaId
+    const lgaFilter = Number.isFinite(lgaNumericId)
       ? "state_id=eq." + encodeURIComponent(String(stateUuid)) + "&irev_lga_id=eq." + encodeURIComponent(String(lgaNumericId))
       : "state_id=eq." + encodeURIComponent(String(stateUuid)) + "&name=eq." + encodeURIComponent(lgaName);
 
