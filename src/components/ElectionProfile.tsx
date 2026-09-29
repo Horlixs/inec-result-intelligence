@@ -10,6 +10,10 @@ interface State { id: string; name: string; code: string | null; }
 interface Lga { id: string; state_id: string; name: string; }
 interface Ward { id: string; lga_id: string; name: string; }
 interface PollingUnit { id: string; ward_id: string; name: string; pu_code: string | null; }
+interface ElectionResultTotal { label: string; total_votes: number | null; reported_polling_units: number | null; polling_units_with_entry: number | null; verified_result_sheets: number | null; }
+interface GeographicResultTotal extends ElectionResultTotal { state_id: string | null; lga_id: string | null; ward_id: string | null; }
+interface PollingUnitResult { election_id: string; polling_unit_id: string | null; result_entry_id: string; label: string; votes: number | null; result_sheet_id: string; extraction_id: string; }
+interface ResultSheet { id: string; source_url: string; status: string; evidence_status: string | null; }
 type Tab = "overview" | "candidates" | "timeline" | "polling" | "results" | "sources";
 type Category = "Federal" | "State" | "Local Government";
 interface MetricCardProps { label: string; value: string; icon: typeof Users; }
@@ -89,6 +93,12 @@ export function ElectionProfile({ selectedElectionId, onElectionSelect, onBackTo
   function clearElection(): void { setSelected(""); onBackToElections?.(); }
   const [sources, setSources] = useState<Source[]>([]);
   const [stats, setStats] = useState<Stats | null>(null);
+  const [resultTotals, setResultTotals] = useState<ElectionResultTotal[]>([]);
+  const [geographicTotals, setGeographicTotals] = useState<GeographicResultTotal[]>([]);
+  const [pollingResults, setPollingResults] = useState<PollingUnitResult[]>([]);
+  const [resultSheets, setResultSheets] = useState<ResultSheet[]>([]);
+  const [resultsLoading, setResultsLoading] = useState(false);
+  const [resultsError, setResultsError] = useState("");
   const [q, setQ] = useState("");
   const [tab, setTab] = useState<Tab>("overview");
   const [loading, setLoading] = useState(true);
@@ -194,6 +204,89 @@ export function ElectionProfile({ selectedElectionId, onElectionSelect, onBackTo
       if (sourceResponse.error || statsResponse.error) setError("Some profile data could not be loaded.");
     });
   }, [selected]);
+
+  useEffect(() => {
+    if (!supabase || !selected) {
+      setResultTotals([]);
+      setGeographicTotals([]);
+      setPollingResults([]);
+      setResultSheets([]);
+      return;
+    }
+
+    const requestId = loadRequestRef.current;
+    setResultsLoading(true);
+    setResultsError("");
+
+    async function loadResults(): Promise<void> {
+      try {
+        const sheetResponse = await supabase!
+          .from("result_sheets")
+          .select("id,source_url,status,evidence_status")
+          .eq("election_id", selected);
+
+        if (sheetResponse.error) throw sheetResponse.error;
+
+        if (pollingUnitId) {
+          const response = await supabase!
+            .from("polling_unit_candidate_results")
+            .select("election_id,polling_unit_id,result_entry_id,label,votes,result_sheet_id,extraction_id")
+            .eq("election_id", selected)
+            .eq("polling_unit_id", pollingUnitId)
+            .order("label", { ascending: true });
+
+          if (response.error) throw response.error;
+          if (requestId !== loadRequestRef.current) return;
+          setPollingResults((response.data ?? []) as PollingUnitResult[]);
+          setResultTotals([]);
+          setGeographicTotals([]);
+        } else if (stateId) {
+          let query = supabase!
+            .from("geographic_candidate_totals")
+            .select("state_id,lga_id,ward_id,label,total_votes,reported_polling_units,polling_units_with_entry,verified_result_sheets")
+            .eq("election_id", selected)
+            .eq("state_id", stateId);
+
+          if (lgaId) query = query.eq("lga_id", lgaId);
+          if (wardId) query = query.eq("ward_id", wardId);
+
+          const response = await query.order("total_votes", { ascending: false });
+          if (response.error) throw response.error;
+          if (requestId !== loadRequestRef.current) return;
+          setGeographicTotals((response.data ?? []) as GeographicResultTotal[]);
+          setResultTotals([]);
+          setPollingResults([]);
+        } else {
+          const response = await supabase!
+            .from("election_candidate_totals")
+            .select("label,total_votes,reported_polling_units,polling_units_with_entry,verified_result_sheets")
+            .eq("election_id", selected)
+            .order("total_votes", { ascending: false });
+
+          if (response.error) throw response.error;
+          if (requestId !== loadRequestRef.current) return;
+          setResultTotals((response.data ?? []) as ElectionResultTotal[]);
+          setGeographicTotals([]);
+          setPollingResults([]);
+        }
+
+        if (requestId === loadRequestRef.current) {
+          setResultSheets((sheetResponse.data ?? []) as ResultSheet[]);
+        }
+      } catch (cause) {
+        if (requestId !== loadRequestRef.current) return;
+        setResultsError(cause instanceof Error ? cause.message : "Verified result records could not be loaded.");
+        setResultTotals([]);
+        setGeographicTotals([]);
+        setPollingResults([]);
+        setResultSheets([]);
+      } finally {
+        if (requestId === loadRequestRef.current) setResultsLoading(false);
+      }
+    }
+
+    void loadResults();
+  }, [selected, stateId, lgaId, wardId, pollingUnitId]);
 
   const scopedRows = useMemo(() => rows.filter((row) => {
     const matchesYear = !year || yearOf(row.election_date) === year;
@@ -363,7 +456,46 @@ export function ElectionProfile({ selectedElectionId, onElectionSelect, onBackTo
 
         {tab === "polling" && <div className="mt-5 rounded-2xl border border-zinc-800/60 bg-zinc-900/40 p-6"><p className="text-[10px] font-semibold uppercase tracking-[0.18em] text-zinc-600">Polling operations</p><h3 className="mt-3 font-display text-xl font-semibold">Official operating guidance</h3><p className="mt-3 max-w-2xl text-sm leading-6 text-zinc-500">Current INEC guidance covers polling-unit opening, accreditation, voting and BVAS verification.</p><div className="mt-5 grid gap-3 sm:grid-cols-2"><div className="rounded-xl border border-zinc-800/60 bg-zinc-950/40 p-4"><p className="text-xs text-zinc-600">General window</p><p className="mt-1 text-sm font-medium text-zinc-200">08:30–14:30</p></div><div className="rounded-xl border border-zinc-800/60 bg-zinc-950/40 p-4"><p className="text-xs text-zinc-600">Verification</p><p className="mt-1 text-sm font-medium text-zinc-200">PVC + BVAS</p></div></div><a href={GUIDANCE} target="_blank" rel="noreferrer" className="mt-5 inline-flex items-center gap-2 text-xs font-medium text-zinc-300 hover:text-white">View INEC guidance <ExternalLink size={13} /></a></div>}
 
-        {tab === "results" && <div className="mt-5 rounded-2xl border border-zinc-800/60 bg-zinc-900/40 p-6"><p className="text-[10px] font-semibold uppercase tracking-[0.18em] text-zinc-600">Result evidence</p><div className="mt-3 flex items-end justify-between gap-4"><div><h3 className="font-display text-xl font-semibold">IReV result-sheet coverage</h3><p className="mt-1 text-xs text-zinc-600">Remote evidence discovered by the collector.</p></div><p className="font-display text-4xl font-semibold">{pct(stats?.result_sheets_expected, stats?.result_sheets_uploaded)}%</p></div><div className="mt-6 h-2 overflow-hidden rounded-full bg-zinc-800"><div className="h-full rounded-full bg-zinc-200 transition-all duration-500" style={{ width: `${pct(stats?.result_sheets_expected, stats?.result_sheets_uploaded)}%` }} /></div><p className="mt-3 text-xs text-zinc-600">{num(stats?.result_sheets_uploaded)} of {num(stats?.result_sheets_expected)} sheets recorded.</p></div>}
+        {tab === "results" && <div className="mt-5 space-y-5">
+          <div className="rounded-2xl border border-zinc-800/60 bg-zinc-900/40 p-6">
+            <div className="flex flex-col gap-4 sm:flex-row sm:items-end sm:justify-between">
+              <div>
+                <p className="text-[10px] font-semibold uppercase tracking-[0.18em] text-zinc-600">Verified result layer</p>
+                <h3 className="mt-2 font-display text-xl font-semibold">Recorded votes from verified result sheets</h3>
+                <p className="mt-1 text-xs leading-5 text-zinc-600">{pollingUnitId ? "Exact polling-unit entries." : stateId ? "Aggregated within the selected geographic scope." : "Election-wide aggregation from verified polling-unit entries."}</p>
+              </div>
+              <div className="text-left sm:text-right">
+                <p className="text-[10px] uppercase tracking-[0.14em] text-zinc-600">Sheet coverage</p>
+                <p className="mt-1 font-display text-2xl font-semibold text-zinc-100">{pct(stats?.result_sheets_expected, stats?.result_sheets_uploaded)}%</p>
+              </div>
+            </div>
+            {resultsError && <div className="mt-5 rounded-xl border border-amber-500/20 bg-amber-500/5 p-4 text-xs text-amber-200">{resultsError}</div>}
+            {resultsLoading ? <div className="mt-6 space-y-2">{[1,2,3,4].map((item) => <div key={item} className="h-12 animate-pulse rounded-xl bg-zinc-800/40" />)}</div> :
+              pollingResults.length || resultTotals.length || geographicTotals.length ? <div className="mt-6 overflow-hidden rounded-xl border border-zinc-800/60">
+                <div className="grid grid-cols-[minmax(0,1fr)_auto_auto_auto] gap-4 border-b border-zinc-800/60 bg-zinc-950/50 px-4 py-3 text-[10px] font-semibold uppercase tracking-[0.12em] text-zinc-600">
+                  <span>Candidate / result label</span><span className="text-right">Votes</span><span className="hidden text-right sm:block">Polling units</span><span className="hidden text-right md:block">Verified sheets</span>
+                </div>
+                {(pollingResults.length ? pollingResults : (stateId ? geographicTotals : resultTotals)).map((row) => {
+                  const isPolling = "result_entry_id" in row;
+                  const votes = isPolling ? row.votes : row.total_votes;
+                  const units = isPolling ? 1 : row.polling_units_with_entry;
+                  const sheets = isPolling ? 1 : row.verified_result_sheets;
+                  return <div key={isPolling ? row.result_entry_id : row.label} className="grid grid-cols-[minmax(0,1fr)_auto_auto_auto] gap-4 border-b border-zinc-800/50 px-4 py-3.5 last:border-0">
+                    <div className="min-w-0"><p className="truncate text-sm font-medium text-zinc-200">{row.label}</p>{isPolling && <p className="mt-0.5 text-[10px] text-zinc-600">Verified polling-unit entry</p>}</div>
+                    <span className="font-display text-sm font-semibold text-zinc-100">{num(votes)}</span>
+                    <span className="hidden text-right text-xs text-zinc-500 sm:block">{num(units)}</span>
+                    <span className="hidden text-right text-xs text-zinc-500 md:block">{num(sheets)}</span>
+                  </div>;
+                })}
+              </div> : <EmptyState label="verified result" />}
+            {resultSheets.length > 0 && <div className="mt-5 flex flex-wrap items-center justify-between gap-3 border-t border-zinc-800/60 pt-4">
+              <p className="text-xs text-zinc-600">{num(resultSheets.length)} result sheets discovered for this election. Only verified extractions enter the totals above.</p>
+              {resultSheets.slice(0, 1).map((sheet) => <a key={sheet.id} href={sheet.source_url} target="_blank" rel="noreferrer" className="inline-flex shrink-0 items-center gap-2 text-xs font-medium text-zinc-300 hover:text-white">Open evidence <ExternalLink size={13} /></a>)}
+            </div>}
+          </div>
+        </div>}
+
+
 
         {(tab === "sources" || tab === "candidates" || tab === "timeline") && (tab === "sources" ? sources.length ? <div className="mt-5 overflow-hidden rounded-2xl border border-zinc-800/60 bg-zinc-900/40">{sources.map((source) => <a key={source.id} href={source.url} target="_blank" rel="noreferrer" className="flex items-center justify-between gap-4 border-b border-zinc-800/60 p-4 transition-all duration-200 hover:bg-zinc-800/30 last:border-0"><div><p className="text-sm font-medium text-zinc-200">{source.title}</p><p className="mt-1 text-xs text-zinc-600">{source.source_type} · {fmt(source.published_at)}</p></div><ExternalLink size={15} className="shrink-0 text-zinc-600" /></a>)}</div> : <div className="mt-5"><EmptyState label="source" /></div> : <div className="mt-5"><EmptyState label={tab} /></div>)}
         <div className="mt-6 grid gap-5 lg:grid-cols-2">
