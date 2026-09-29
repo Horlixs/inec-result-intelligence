@@ -8,6 +8,7 @@ const supabase = createClient(
 const geminiKey = Deno.env.get("GOOGLE_GENERATIVE_AI_API_KEY");
 const ORIGIN = "https://inecelectionresults.ng";
 const UA = "INEC-Result-Intelligence/1.0 evidence-collector";
+const MAX_EVIDENCE_BYTES = 20 * 1024 * 1024;
 
 function sha256(bytes: Uint8Array): Promise<string> {
   return crypto.subtle.digest("SHA-256", bytes).then(buffer =>
@@ -60,6 +61,9 @@ async function fetchEvidence(sourceUrl: string) {
   const firstMime = normaliseMime(first.headers.get("content-type"));
   const firstBytes = new Uint8Array(await first.arrayBuffer());
   if (!firstBytes.length) throw new Error("Source returned an empty document.");
+  if (firstBytes.byteLength > MAX_EVIDENCE_BYTES) {
+    throw new Error("Evidence document exceeds the 20 MB processing limit.");
+  }
 
   if (isSupportedMime(firstMime)) {
     return { bytes: firstBytes, mime: firstMime, assetUrl: sourceUrl };
@@ -84,6 +88,7 @@ async function fetchEvidence(sourceUrl: string) {
 
       const mime = normaliseMime(response.headers.get("content-type"));
       const bytes = new Uint8Array(await response.arrayBuffer());
+      if (bytes.length > MAX_EVIDENCE_BYTES) continue;
       if (bytes.length && isSupportedMime(mime)) {
         return { bytes, mime, assetUrl };
       }
@@ -95,9 +100,78 @@ async function fetchEvidence(sourceUrl: string) {
   throw new Error("IReV document page did not expose a supported PDF or image asset.");
 }
 
-function validate(values: Array<{ label: string; votes: number | null }>) {
-  return values.length > 0 &&
-    values.every(x => x.label && (x.votes === null || (Number.isInteger(x.votes) && x.votes >= 0)));
+function validateExtracted(extracted: {
+  registeredVoters?: number | null;
+  accreditedVoters?: number | null;
+  rejectedVotes?: number | null;
+  candidates: Array<{ label: string; votes: number | null }>;
+}) {
+  const issues: Array<{ code: string; severity: "error" | "warning"; details: Record<string, unknown> }> = [];
+  const labels = new Set<string>();
+
+  if (!Array.isArray(extracted.candidates) || extracted.candidates.length === 0) {
+    issues.push({ code: "no_candidate_rows", severity: "error", details: {} });
+  }
+
+  for (const candidate of extracted.candidates ?? []) {
+    const label = String(candidate?.label ?? "").trim();
+    if (!label) {
+      issues.push({ code: "candidate_label_missing", severity: "error", details: {} });
+      continue;
+    }
+    const key = label.toLowerCase();
+    if (labels.has(key)) {
+      issues.push({ code: "duplicate_candidate_label", severity: "error", details: { label } });
+    }
+    labels.add(key);
+
+    if (candidate.votes !== null && (!Number.isInteger(candidate.votes) || candidate.votes < 0)) {
+      issues.push({ code: "candidate_votes_invalid", severity: "error", details: { label, votes: candidate.votes } });
+    }
+  }
+
+  const registered = extracted.registeredVoters;
+  const accredited = extracted.accreditedVoters;
+  const rejected = extracted.rejectedVotes;
+
+  for (const [name, value] of [["registeredVoters", registered], ["accreditedVoters", accredited], ["rejectedVotes", rejected]] as const) {
+    if (value !== null && value !== undefined && (!Number.isInteger(value) || value < 0)) {
+      issues.push({ code: name + "_invalid", severity: "error", details: { value } });
+    }
+  }
+
+  if (Number.isInteger(registered) && Number.isInteger(accredited) && accredited! > registered!) {
+    issues.push({ code: "accredited_exceeds_registered", severity: "error", details: { registered, accredited } });
+  }
+
+  const knownVotes = (extracted.candidates ?? [])
+    .map(candidate => candidate.votes)
+    .filter((value): value is number => Number.isInteger(value) && value >= 0);
+
+  if (Number.isInteger(accredited) && Number.isInteger(rejected) && knownVotes.length === (extracted.candidates ?? []).length) {
+    const total = knownVotes.reduce((sum, value) => sum + value, 0) + rejected!;
+    if (total !== accredited!) {
+      issues.push({
+        code: "vote_total_mismatch",
+        severity: "warning",
+        details: { candidate_votes: knownVotes.reduce((sum, value) => sum + value, 0), rejected_votes: rejected, accredited_voters: accredited, total },
+      });
+    }
+  } else if (Number.isInteger(accredited) && knownVotes.length === (extracted.candidates ?? []).length && rejected == null) {
+    const total = knownVotes.reduce((sum, value) => sum + value, 0);
+    if (total > accredited!) {
+      issues.push({
+        code: "candidate_votes_exceed_accredited",
+        severity: "error",
+        details: { candidate_votes: total, accredited_voters: accredited },
+      });
+    }
+  }
+
+  return {
+    valid: issues.every(issue => issue.severity !== "error"),
+    issues,
+  };
 }
 
 async function extractWithGemini(bytes: Uint8Array, mime: string) {
@@ -200,8 +274,10 @@ Deno.serve(async request => {
         status: "unchanged",
         evidence_retained: false,
         source_hash: hash,
-        asset_url: evidence.assetUrl,
+        source_url: sheet.source_url,
+        evidence_url: evidence.assetUrl,
         mime_type: evidence.mime,
+        evidence_size_bytes: evidence.bytes.byteLength,
       }), { headers: { "content-type": "application/json" } });
     }
 
@@ -209,17 +285,21 @@ Deno.serve(async request => {
       source_hash: hash,
       storage_path: null,
       mime_type: evidence.mime,
+      evidence_url: evidence.assetUrl,
+      evidence_size_bytes: evidence.bytes.byteLength,
+      source_fetched_at: new Date().toISOString(),
       captured_at: new Date().toISOString(),
     }).eq("id", id);
 
     const extracted = await extractWithGemini(evidence.bytes, evidence.mime);
     const candidates = Array.isArray(extracted.candidates) ? extracted.candidates : [];
-    const structurallyValid = validate(candidates);
+    const validation = validateExtracted({ ...extracted, candidates });
     const confidence = Number(extracted.confidence);
+    const confidenceValid = Number.isFinite(confidence) && confidence >= 0 && confidence <= 1;
 
     const extractionStatus =
-      structurallyValid && Number.isFinite(confidence) && confidence >= 0 && confidence <= 1
-        ? (confidence >= 0.85 ? "verified" : "pending_review")
+      validation.valid && confidenceValid && confidence >= 0.85
+        ? "verified"
         : "pending_review";
 
     const { data: extraction, error: extractionError } = await supabase
@@ -254,14 +334,14 @@ Deno.serve(async request => {
 
     const checks = [
       {
-        check_name: "candidate_votes_nonnegative_integer",
-        passed: structurallyValid,
-        severity: structurallyValid ? "info" : "error",
-        details: { count: candidates.length },
+        check_name: "deterministic_result_validation",
+        passed: validation.valid,
+        severity: validation.valid ? "info" : "error",
+        details: { issues: validation.issues, candidate_count: candidates.length },
       },
       {
         check_name: "extraction_confidence_range",
-        passed: Number.isFinite(confidence) && confidence >= 0 && confidence <= 1,
+        passed: confidenceValid,
         severity: "error",
         details: { confidence },
       },
@@ -269,7 +349,13 @@ Deno.serve(async request => {
         check_name: "source_sha256_recorded",
         passed: Boolean(hash),
         severity: "info",
-        details: { sha256: hash, asset_url: evidence.assetUrl, mime_type: evidence.mime },
+        details: {
+          sha256: hash,
+          source_url: sheet.source_url,
+          evidence_url: evidence.assetUrl,
+          mime_type: evidence.mime,
+          byte_length: evidence.bytes.byteLength,
+        },
       },
     ];
 
@@ -292,8 +378,10 @@ Deno.serve(async request => {
       status: extractionStatus,
       evidence_retained: false,
       source_hash: hash,
-      asset_url: evidence.assetUrl,
+      source_url: sheet.source_url,
+      evidence_url: evidence.assetUrl,
       mime_type: evidence.mime,
+      evidence_size_bytes: evidence.bytes.byteLength,
     }), { headers: { "content-type": "application/json" } });
   } catch (error) {
     await supabase.from("result_sheets").update({
