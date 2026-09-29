@@ -51,9 +51,15 @@ async function fetchIrevWard(electionExternalId: string, wardObjectId: string): 
 
 function irevRows(payload: unknown): Array<Record<string, unknown>> {
   if (Array.isArray(payload)) return payload.filter((row): row is Record<string, unknown> => !!row && typeof row === "object");
-  if (payload && typeof payload === "object") {
-    const data = (payload as Record<string, unknown>).data;
-    if (Array.isArray(data)) return data.filter((row): row is Record<string, unknown> => !!row && typeof row === "object");
+  if (!payload || typeof payload !== "object") return [];
+  const object = payload as Record<string, unknown>;
+  for (const key of ["data", "polling_units", "pus", "results", "items"]) {
+    const value = object[key];
+    if (Array.isArray(value)) return value.filter((row): row is Record<string, unknown> => !!row && typeof row === "object");
+    if (value && typeof value === "object") {
+      const nested = irevRows(value);
+      if (nested.length) return nested;
+    }
   }
   return [];
 }
