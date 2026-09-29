@@ -2,7 +2,7 @@ import { ArrowUpRight, CalendarDays, CheckCircle2, ChevronDown, ChevronRight, Ex
 import { useEffect, useMemo, useState } from "react";
 import { supabase } from "../lib/supabase";
 
-interface ElectionProfileProps { selectedElectionId?: string; onElectionSelect?: (electionId: string) => void; onBackToElections?: () => void; }
+interface ElectionProfileProps { selectedElectionId?: string; onElectionSelect?: (electionId: string) => void; onBackToElections?: () => void; detailOnly?: boolean; }
 interface Election { id: string; name: string; election_type: string; election_date: string | null; source_url: string | null; status: string; }
 interface Source { id: string; title: string; url: string; source_type: string; published_at: string | null; }
 interface Stats { registered_voters: number | null; polling_units_expected: number | null; result_sheets_expected: number | null; result_sheets_uploaded: number | null; candidates_count: number | null; parties_count: number | null; }
@@ -70,7 +70,7 @@ function SelectBox({ label, value, options, placeholder, onChange, disabled = fa
   </label>;
 }
 
-export function ElectionProfile({ selectedElectionId, onElectionSelect, onBackToElections }: ElectionProfileProps) {
+export function ElectionProfile({ selectedElectionId, onElectionSelect, onBackToElections, detailOnly = false }: ElectionProfileProps) {
   const [rows, setRows] = useState<Election[]>([]);
   const [states, setStates] = useState<State[]>([]);
   const [lgas, setLgas] = useState<Lga[]>([]);
@@ -223,7 +223,7 @@ export function ElectionProfile({ selectedElectionId, onElectionSelect, onBackTo
   ];
 
   return <section>
-    <div className="rounded-2xl border border-zinc-800/60 bg-zinc-900/35 p-4 sm:p-5">
+    <div className="rounded-2xl border border-zinc-800/60 bg-zinc-900/35 p-4 sm:p-5" style={{ display: detailOnly ? "none" : "block" }}>
       <div className="flex flex-col gap-4 xl:flex-row xl:items-end xl:justify-between">
         <div>
           <p className="text-[10px] font-semibold uppercase tracking-[0.18em] text-zinc-600">Election explorer</p>
