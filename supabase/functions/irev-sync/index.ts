@@ -222,6 +222,175 @@ async function discoverFromCurrentIrevDirectory(): Promise<{ elections: ReturnTy
   return { elections: [...elections.values()], attempts };
 }
 
+async function apiGet(base: string, path: string): Promise<unknown> {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 15000);
+  try {
+    const response = await fetch(base + path, {
+      headers: {
+        "user-agent": UA,
+        accept: "application/json, text/plain, */*",
+        origin: ORIGIN,
+        referer: ORIGIN + "/",
+        "x-api-key": PUBLIC_INEC_CLIENT_KEY,
+        "x-api-rt": String(Date.now()),
+      },
+      signal: controller.signal,
+    });
+    const body = await response.text();
+    if (!response.ok || !body) return null;
+    try { return JSON.parse(body); } catch { return null; }
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
+function apiRows(payload: unknown): Array<Record<string, unknown>> {
+  if (Array.isArray(payload)) return payload.filter((row): row is Record<string, unknown> => !!row && typeof row === "object");
+  if (payload && typeof payload === "object") {
+    const data = (payload as Record<string, unknown>).data;
+    if (Array.isArray(data)) return data.filter((row): row is Record<string, unknown> => !!row && typeof row === "object");
+  }
+  return [];
+}
+
+function objectId(value: unknown): string | null {
+  const id = String(value ?? "").trim();
+  return id && /^[a-f0-9]{24}$/i.test(id) ? id : null;
+}
+
+function documentUrl(row: Record<string, unknown>): string | null {
+  const candidates = [
+    row.document,
+    row.result,
+    row.result_sheet,
+    row.file,
+    row.file_url,
+    row.document_url,
+    row.url,
+    row.path,
+  ];
+  for (const candidate of candidates) {
+    if (typeof candidate === "string" && /^https?:\\/\\//i.test(candidate)) return candidate;
+    if (candidate && typeof candidate === "object") {
+      const obj = candidate as Record<string, unknown>;
+      for (const key of ["url", "file_url", "document_url", "path", "src"]) {
+        const value = obj[key];
+        if (typeof value === "string" && /^https?:\\/\\//i.test(value)) return value;
+      }
+    }
+  }
+  return null;
+}
+
+function puExternalId(row: Record<string, unknown>): string | null {
+  return String(row.polling_unit_id ?? row._id ?? row.external_id ?? "").trim() || null;
+}
+
+async function discoverApiWardStructure(
+  base: string,
+  electionExternalId: string,
+  electionId: string,
+  irevStateId: number,
+): Promise<number> {
+  const structure = await apiGet(
+    base,
+    "/elections/" + encodeURIComponent(electionExternalId) + "/lga/state/" + irevStateId,
+  );
+  const lgas = apiRows(structure);
+  if (!lgas.length) return 0;
+
+  const state = await supabaseRest(
+    "states?select=id&code=eq." + encodeURIComponent(String(irevStateId).padStart(2, "0")) + "&limit=1",
+    { method: "GET" },
+  );
+  const stateRows = Array.isArray(state.body) ? state.body as Array<Record<string, unknown>> : [];
+  const stateUuid = stateRows[0]?.id;
+  if (!stateUuid) return 0;
+
+  let queued = 0;
+  for (const lgaRaw of lgas) {
+    const lga = (lgaRaw.lga && typeof lgaRaw.lga === "object") ? lgaRaw.lga as Record<string, unknown> : lgaRaw;
+    const lgaName = String(lga.name ?? lga.lga_name ?? "").trim();
+    if (!lgaName) continue;
+
+    const lgaId = objectId(lga._id);
+    const lgaNumericId = Number(lga.lga_id ?? lga.id);
+    const lgaFilter = lgaId
+      ? "state_id=eq." + encodeURIComponent(String(stateUuid)) + "&irev_lga_id=eq." + encodeURIComponent(String(lgaNumericId))
+      : "state_id=eq." + encodeURIComponent(String(stateUuid)) + "&name=eq." + encodeURIComponent(lgaName);
+
+    let lookup = await supabaseRest("lgas?select=id&" + lgaFilter + "&limit=1", { method: "GET" });
+    let lgaRows = Array.isArray(lookup.body) ? lookup.body as Array<Record<string, unknown>> : [];
+    let canonicalLgaId = lgaRows[0]?.id;
+
+    if (!canonicalLgaId) {
+      const created = await supabaseRest("lgas", {
+        method: "POST",
+        headers: { Prefer: "return=representation,resolution=merge-duplicates" },
+        body: JSON.stringify({
+          state_id: stateUuid,
+          name: lgaName,
+          irev_lga_id: Number.isFinite(lgaNumericId) ? lgaNumericId : null,
+        }),
+      });
+      const createdRows = Array.isArray(created.body) ? created.body as Array<Record<string, unknown>> : [];
+      canonicalLgaId = createdRows[0]?.id;
+    } else if (Number.isFinite(lgaNumericId)) {
+      await supabaseRest("lgas?id=eq." + encodeURIComponent(String(canonicalLgaId)), {
+        method: "PATCH",
+        headers: { Prefer: "return=minimal" },
+        body: JSON.stringify({ irev_lga_id: lgaNumericId }),
+      });
+    }
+    if (!canonicalLgaId) continue;
+
+    const wards = Array.isArray(lgaRaw.wards) ? lgaRaw.wards : [];
+    for (const wardRawValue of wards) {
+      if (!wardRawValue || typeof wardRawValue !== "object") continue;
+      const wardRaw = wardRawValue as Record<string, unknown>;
+      const wardName = String(wardRaw.ward_name ?? wardRaw.name ?? "").trim();
+      const wardOid = objectId(wardRaw._id);
+      if (!wardName || !wardOid) continue;
+
+      const wardLookup = await supabaseRest(
+        "wards?select=id&lga_id=eq." + encodeURIComponent(String(canonicalLgaId)) + "&irev_ward_oid=eq." + encodeURIComponent(wardOid) + "&limit=1",
+        { method: "GET" },
+      );
+      const wardRows = Array.isArray(wardLookup.body) ? wardLookup.body as Array<Record<string, unknown>> : [];
+      let canonicalWardId = wardRows[0]?.id;
+      if (!canonicalWardId) {
+        const byName = await supabaseRest(
+          "wards?select=id&lga_id=eq." + encodeURIComponent(String(canonicalLgaId)) + "&name=eq." + encodeURIComponent(wardName) + "&limit=1",
+          { method: "GET" },
+        );
+        const byNameRows = Array.isArray(byName.body) ? byName.body as Array<Record<string, unknown>> : [];
+        canonicalWardId = byNameRows[0]?.id;
+      }
+      const wardNumericId = Number(wardRaw.ward_id ?? wardRaw.id);
+      if (canonicalWardId) {
+        await supabaseRest("wards?id=eq." + encodeURIComponent(String(canonicalWardId)), {
+          method: "PATCH",
+          headers: { Prefer: "return=minimal" },
+          body: JSON.stringify({
+            irev_ward_id: Number.isFinite(wardNumericId) ? wardNumericId : null,
+            irev_ward_oid: wardOid,
+          }),
+        });
+      }
+      if (canonicalWardId) {
+        const job = await supabaseRest("irev_ward_sync_jobs?on_conflict=election_id,ward_id", {
+          method: "POST",
+          headers: { Prefer: "resolution=merge-duplicates,return=minimal" },
+          body: JSON.stringify({ election_id: electionId, ward_id: canonicalWardId, status: "queued", available_at: new Date().toISOString() }),
+        });
+        if (job.response.ok) queued++;
+      }
+    }
+  }
+  return queued;
+}
+
 async function crawlElection(sourceUrl: string): Promise<string[]> {
   const sourceOrigin = new URL(sourceUrl).origin;
   const queue: Array<{ url: string; depth: number }> = [{ url: sourceUrl, depth: 0 }];
@@ -311,7 +480,21 @@ Deno.serve(async request => {
         const electionId = rows[0]?.id;
         if (!electionId) { electionStats.push({ external_id: election.external_id, error: "saved election id not found" }); continue; }
 
-        const resultLinks = await crawlElection(election.source_url);
+        let queuedWardJobs = 0;
+        if (election.external_id.startsWith("irev:")) {
+          const apiElectionId = election.external_id.slice("irev:".length);
+          const stateIdMatch = election.name.match(/(?:^|[-\\s])(\\d{2})[-\\s]/);
+          const parsedStateId = stateIdMatch ? Number(stateIdMatch[1]) : null;
+          const stateId = parsedStateId && parsedStateId >= 1 && parsedStateId <= 37 ? parsedStateId : null;
+          if (stateId) {
+            for (const base of API_BASES) {
+              queuedWardJobs = await discoverApiWardStructure(base, apiElectionId, String(electionId), stateId);
+              if (queuedWardJobs > 0) break;
+            }
+          }
+        }
+
+        const resultLinks = queuedWardJobs === 0 ? await crawlElection(election.source_url) : [];
         const sheetRows = resultLinks.map(url => ({ election_id: electionId, source_url: url, source_external_id: url, status: "discovered", evidence_status: "remote_only", storage_policy: "ephemeral" }));
         if (sheetRows.length) {
           const result = await supabaseRest("result_sheets?on_conflict=election_id,source_url", { method: "POST", headers: { Prefer: "resolution=merge-duplicates,return=minimal" }, body: JSON.stringify(sheetRows) });
@@ -319,14 +502,14 @@ Deno.serve(async request => {
           if (error) throw error;
           resultSheetsDiscovered += sheetRows.length;
         }
-        electionStats.push({ external_id: election.external_id, result_links: resultLinks.length });
+        electionStats.push({ external_id: election.external_id, result_links: resultLinks.length, queued_ward_jobs: queuedWardJobs });
       } catch (error) {
         electionStats.push({ external_id: election.external_id, error: error instanceof Error ? error.message : String(error) });
       }
     }
 
     stage = "insert_pipeline_run";
-    const pipeline = await supabaseRest("pipeline_runs", { method: "POST", headers: { Prefer: "return=minimal" }, body: JSON.stringify({ started_at: startedAt, finished_at: new Date().toISOString(), status: "completed", trigger_source: "server", discovered: elections.length, metadata: { source: "IReV", mode: "server-side-bounded-crawl", result_sheets_discovered: resultSheetsDiscovered, elections: electionStats, homepage: homepageDiagnostics, scanned_directory_pages: scannedDirectoryPages, api_discovery_attempts: apiDiscovery.attempts } }) });
+    const pipeline = await supabaseRest("pipeline_runs", { method: "POST", headers: { Prefer: "return=minimal" }, body: JSON.stringify({ started_at: startedAt, finished_at: new Date().toISOString(), status: "completed", trigger_source: "server", discovered: elections.length, metadata: { source: "IReV", mode: "server-side-bounded-crawl", result_sheets_discovered: resultSheetsDiscovered, elections: electionStats, hierarchy: "IReV API with durable ward queue", homepage: homepageDiagnostics, scanned_directory_pages: scannedDirectoryPages, api_discovery_attempts: apiDiscovery.attempts } }) });
     const pipelineError = supabaseError("pipeline_runs insert", pipeline);
     if (pipelineError) throw pipelineError;
 
