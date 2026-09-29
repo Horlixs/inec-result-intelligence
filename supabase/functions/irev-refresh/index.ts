@@ -136,6 +136,46 @@ async function processWardJob(job: Record<string, unknown>) {
   return { polling_units: rows.length, result_sheets: sheets };
 }
 
+async function drainWardJobs(maxJobs: number) {
+  const workerId = "irev-ward-refresh";
+  const claimFunction = "claim_" + "irev_ward_sync_job";
+  let processed = 0;
+  let failed = 0;
+  for (let index = 0; index < maxJobs; index++) {
+    const result = await supabase.rpc(claimFunction, {
+      p_worker_id: workerId,
+      p_max_attempts: WARD_MAX_ATTEMPTS,
+    });
+    if (result.error) throw result.error;
+    const job = result.data?.[0];
+    if (!job) break;
+    try {
+      const outcome = await processWardJob(job);
+      await supabase.from("irev_ward_sync_jobs").update({
+        status: "completed",
+        locked_at: null,
+        locked_by: null,
+        last_error: null,
+        discovered_sheets: outcome.result_sheets,
+        last_synced_at: new Date().toISOString(),
+        updated_at: new Date().toISOString(),
+      }).eq("id", job.job_id);
+      processed++;
+    } catch (error) {
+      failed++;
+      await supabase.from("irev_ward_sync_jobs").update({
+        status: Number(job.attempts) < WARD_MAX_ATTEMPTS ? "queued" : "failed",
+        locked_at: null,
+        locked_by: null,
+        last_error: error instanceof Error ? error.message : String(error),
+        available_at: new Date(Date.now() + 900000).toISOString(),
+        updated_at: new Date().toISOString(),
+      }).eq("id", job.job_id);
+    }
+  }
+  return { processed, failed };
+}
+
 async function invoke(name: string, body: unknown) {
   const response = await fetch(url.replace(/\/$/, "") + "/functions/v1/" + name, {
     method: "POST",
