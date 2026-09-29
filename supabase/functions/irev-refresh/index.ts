@@ -4,7 +4,7 @@ const url = Deno.env.get("SUPABASE_URL")!;
 const key = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
 const supabase = createClient(url, key);
 
-const MAX_JOBS_PER_REFRESH = 20;
+const MAX_JOBS_PER_REFRESH = 5;
 const MAX_ATTEMPTS = 5;
 const WORKER_ID = `irev-refresh:${crypto.randomUUID()}`;
 
@@ -299,7 +299,7 @@ Deno.serve(async request => {
 
   try {
     const discovery = await invoke("irev-sync", { mode: "scheduled-refresh" });
-    const wardJobs = await drainWardJobs(20);
+    const wardJobs = await drainWardJobs(5);
     const queued = await enqueueDiscoveredSheets();
 
     let processed = 0;

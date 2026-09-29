@@ -15,6 +15,9 @@ const KNOWN_ELECTION_TYPE_IDS = [
 ];
 const KNOWN_STATE_IDS = Array.from({ length: 37 }, (_, index) => index + 1);
 const ELECTION_DISCOVERY_CONCURRENCY = 20;
+const MAX_ELECTIONS_PER_SYNC = 3;
+const MAX_DIRECTORY_PAGES = 20;
+const MAX_CRAWL_PAGES = 100;
 
 function json(data: unknown, status = 200) {
   return new Response(JSON.stringify(data), {
@@ -404,7 +407,7 @@ async function crawlElection(sourceUrl: string): Promise<string[]> {
   const queue: Array<{ url: string; depth: number }> = [{ url: sourceUrl, depth: 0 }];
   const visited = new Set<string>();
   const resultPages = new Set<string>();
-  while (queue.length && visited.size < 750) {
+  while (queue.length && visited.size < MAX_CRAWL_PAGES) {
     const current = queue.shift()!;
     if (visited.has(current.url)) continue;
     visited.add(current.url);
@@ -452,7 +455,7 @@ Deno.serve(async request => {
     const queue = extractSameOriginLinks(homepageHtml);
     const visited = new Set<string>([ORIGIN + "/"]);
     let scannedDirectoryPages = 0;
-    while (queue.length && scannedDirectoryPages < 50) {
+    while (queue.length && scannedDirectoryPages < MAX_DIRECTORY_PAGES) {
       const pageUrl = queue.shift()!;
       if (visited.has(pageUrl)) continue;
       visited.add(pageUrl);
@@ -469,6 +472,13 @@ Deno.serve(async request => {
     }
 
     const elections = [...discovered.values()];
+    const electionsToProcess = [...elections]
+      .sort((a, b) => {
+        const aTime = a.election_date ? Date.parse(a.election_date) : 0;
+        const bTime = b.election_date ? Date.parse(b.election_date) : 0;
+        return bTime - aTime;
+      })
+      .slice(0, MAX_ELECTIONS_PER_SYNC);
     stage = "upsert_elections";
     if (elections.length) {
       const result = await supabaseRest("elections?on_conflict=external_id", { method: "POST", headers: { Prefer: "resolution=merge-duplicates,return=minimal" }, body: JSON.stringify(elections) });
@@ -478,7 +488,7 @@ Deno.serve(async request => {
 
     let resultSheetsDiscovered = 0;
     const electionStats: Array<Record<string, unknown>> = [];
-    for (const election of elections) {
+    for (const election of electionsToProcess) {
       try {
         stage = `process_election:${election.external_id}`;
         const lookup = await supabaseRest(`elections?select=id&external_id=eq.${encodeURIComponent(election.external_id)}&limit=1`, { method: "GET" });
@@ -517,11 +527,17 @@ Deno.serve(async request => {
     }
 
     stage = "insert_pipeline_run";
-    const pipeline = await supabaseRest("pipeline_runs", { method: "POST", headers: { Prefer: "return=minimal" }, body: JSON.stringify({ started_at: startedAt, finished_at: new Date().toISOString(), status: "completed", trigger_source: "server", discovered: elections.length, metadata: { source: "IReV", mode: "server-side-bounded-crawl", result_sheets_discovered: resultSheetsDiscovered, elections: electionStats, hierarchy: "IReV API with durable ward queue", homepage: homepageDiagnostics, scanned_directory_pages: scannedDirectoryPages, api_discovery_attempts: apiDiscovery.attempts } }) });
+    const pipeline = await supabaseRest("pipeline_runs", { method: "POST", headers: { Prefer: "return=minimal" }, body: JSON.stringify({ started_at: startedAt, finished_at: new Date().toISOString(), status: "completed", trigger_source: "server", discovered: elections.length, metadata: { source: "IReV", mode: "server-side-bounded-crawl",
+        max_elections_per_sync: MAX_ELECTIONS_PER_SYNC,
+        max_directory_pages: MAX_DIRECTORY_PAGES,
+        max_crawl_pages: MAX_CRAWL_PAGES,
+        processed_elections: electionsToProcess.length,
+        result_sheets_discovered: resultSheetsDiscovered,
+        elections: electionStats, hierarchy: "IReV API with durable ward queue", homepage: homepageDiagnostics, scanned_directory_pages: scannedDirectoryPages, api_discovery_attempts: apiDiscovery.attempts } }) });
     const pipelineError = supabaseError("pipeline_runs insert", pipeline);
     if (pipelineError) throw pipelineError;
 
-    return json({ ok: true, discovered: elections.length, result_sheets_discovered: resultSheetsDiscovered, elections: electionStats, diagnostics: { homepage: homepageDiagnostics, scanned_directory_pages: scannedDirectoryPages, api_discovery_attempts: apiDiscovery.attempts } });
+    return json({ ok: true, discovered: elections.length, processed: electionsToProcess.length, result_sheets_discovered: resultSheetsDiscovered, elections: electionStats, diagnostics: { homepage: homepageDiagnostics, scanned_directory_pages: scannedDirectoryPages, api_discovery_attempts: apiDiscovery.attempts } });
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     return json({ ok: false, stage, error: message }, 500);
