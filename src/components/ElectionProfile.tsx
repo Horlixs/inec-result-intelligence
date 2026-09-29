@@ -100,31 +100,56 @@ export function ElectionProfile({ selectedElectionId, onElectionSelect, onBackTo
   const [geoReady, setGeoReady] = useState(false);
 
   async function load(): Promise<void> {
-    setLoading(true); setError("");
+    setLoading(true);
+    setError("");
     if (selectedElectionId) setSelectionLoading(true);
-    if (!supabase) { setError("Supabase is not configured in this deployment."); setLoading(false); setSelectionLoading(false); return; }
-    const [electionsResponse, statesResponse] = await Promise.all([
-      supabase.from("elections").select("id,name,election_type,election_date,source_url,status").order("election_date", { ascending: true }),
-      supabase.from("states").select("id,name,code").order("name", { ascending: true }),
-    ]);
-    if (electionsResponse.error) { setError(electionsResponse.error.message); setLoading(false); setSelectionLoading(false); return; }
-    const loadedRows = (electionsResponse.data ?? []) as Election[];
-    setRows(loadedRows);
-    setStates((statesResponse.data ?? []) as State[]);
-    if (selectedElectionId) {
+
+    try {
+      if (!supabase) {
+        throw new Error("Supabase is not configured in this deployment.");
+      }
+
+      const [electionsResponse, statesResponse] = await Promise.all([
+        supabase.from("elections").select("id,name,election_type,election_date,source_url,status").order("election_date", { ascending: true }),
+        supabase.from("states").select("id,name,code").order("name", { ascending: true }),
+      ]);
+
+      if (electionsResponse.error) throw electionsResponse.error;
+      if (statesResponse.error) throw statesResponse.error;
+
+      const loadedRows = (electionsResponse.data ?? []) as Election[];
+      setRows(loadedRows);
+      setStates((statesResponse.data ?? []) as State[]);
+
+      if (!selectedElectionId) {
+        setSelectedElection(null);
+        return;
+      }
+
       const matched = loadedRows.find((row) => row.id === selectedElectionId);
       if (matched) {
         setSelectedElection(matched);
-      } else {
-        const directResponse = await supabase.from("elections").select("id,name,election_type,election_date,source_url,status").eq("id", selectedElectionId).maybeSingle();
-        if (directResponse.error) setError(`Election could not be loaded: ${directResponse.error.message}`);
-        setSelectedElection((directResponse.data ?? null) as Election | null);
+        return;
       }
-    } else {
+
+      const directResponse = await supabase
+        .from("elections")
+        .select("id,name,election_type,election_date,source_url,status")
+        .eq("id", selectedElectionId)
+        .maybeSingle();
+
+      if (directResponse.error) {
+        throw new Error(`Election could not be loaded: ${directResponse.error.message}`);
+      }
+
+      setSelectedElection((directResponse.data ?? null) as Election | null);
+    } catch (cause) {
       setSelectedElection(null);
+      setError(cause instanceof Error ? cause.message : "Unable to load election data.");
+    } finally {
+      setLoading(false);
+      setSelectionLoading(false);
     }
-    setLoading(false);
-    setSelectionLoading(false);
   }
 
   useEffect(() => { void load(); }, [selectedElectionId]);
@@ -340,7 +365,7 @@ export function ElectionProfile({ selectedElectionId, onElectionSelect, onBackTo
           <div className="rounded-2xl border border-zinc-800/60 bg-zinc-900/35 p-5"><p className="text-[10px] font-semibold uppercase tracking-[0.18em] text-zinc-600">Explore related</p><h3 className="mt-2 font-display text-lg font-semibold text-zinc-100">More elections in this area</h3><div className="mt-4 space-y-2">{relatedElections.map((item) => <button key={item.id} onClick={() => { selectElection(item.id); }} className="flex w-full items-center justify-between rounded-xl border border-zinc-800/60 bg-zinc-950/35 px-3.5 py-3 text-left hover:border-zinc-700 hover:bg-zinc-900"><span><span className="block text-sm font-medium text-zinc-200">{humanElectionType(item.election_type)}</span><span className="text-[11px] text-zinc-600">{item.name}</span></span><ArrowUpRight size={14} className="text-zinc-700" /></button>)}</div></div>
           <div className="rounded-2xl border border-zinc-800/60 bg-zinc-900/35 p-5"><p className="text-[10px] font-semibold uppercase tracking-[0.18em] text-zinc-600">Explore others</p><h3 className="mt-2 font-display text-lg font-semibold text-zinc-100">Other elections</h3><div className="mt-4 space-y-2">{otherElections.map((item) => <button key={item.id} onClick={() => selectElection(item.id)} className="flex w-full items-center justify-between rounded-xl border border-zinc-800/60 bg-zinc-950/35 px-3.5 py-3 text-left hover:border-zinc-700 hover:bg-zinc-900"><span><span className="block text-sm font-medium text-zinc-200">{humanElectionType(item.election_type)}</span><span className="text-[11px] text-zinc-600">{item.name}</span></span><ArrowUpRight size={14} className="text-zinc-700" /></button>)}</div></div>
         </div>
-      </> : <div className="rounded-2xl border border-zinc-800/60 bg-zinc-900/30 p-12 text-center"><FileImage className="mx-auto text-zinc-700" size={32} /><h3 className="mt-4 font-display text-lg font-semibold">{selectedElectionId ? "Election record not found" : "No election selected"}</h3><p className="mt-2 text-sm text-zinc-600">{selectedElectionId ? "The requested election could not be found in the intelligence database." : "Choose an election from the directory to view its result evidence."}</p></div>}
+      </> : <div className="rounded-2xl border border-zinc-800/60 bg-zinc-900/30 p-12 text-center"><FileImage className="mx-auto text-zinc-700" size={32} /><h3 className="mt-4 font-display text-lg font-semibold">{selectedElectionId ? "Election record not found" : "No election selected"}</h3><p className="mt-2 text-sm text-zinc-600">{selectedElectionId ? (error || "The requested election could not be found in the intelligence database.") : "Choose an election from the directory to view its result evidence."}</p></div>}
     </div>
   </section>;
 }
