@@ -233,7 +233,7 @@ async function discoverFromCurrentIrevDirectory(): Promise<{ elections: ReturnTy
   return { elections: [...elections.values()], attempts };
 }
 
-async function apiGet(base: string, path: string): Promise<unknown> {
+async function apiGet(base: string, path: string, diagnostics?: Array<Record<string, unknown>>): Promise<unknown> {
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), 15000);
   try {
@@ -249,6 +249,7 @@ async function apiGet(base: string, path: string): Promise<unknown> {
       signal: controller.signal,
     });
     const body = await response.text();
+    diagnostics?.push({ base, endpoint: path, status: response.status, content_type: response.headers.get("content-type"), length: body.length, preview: body.slice(0, 500) });
     if (!response.ok || !body) return null;
     try { return JSON.parse(body); } catch { return null; }
   } finally {
@@ -256,13 +257,37 @@ async function apiGet(base: string, path: string): Promise<unknown> {
   }
 }
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return !!value && typeof value === "object" && !Array.isArray(value);
+}
+
 function apiRows(payload: unknown): Array<Record<string, unknown>> {
-  if (Array.isArray(payload)) return payload.filter((row): row is Record<string, unknown> => !!row && typeof row === "object");
-  if (payload && typeof payload === "object") {
-    const data = (payload as Record<string, unknown>).data;
-    if (Array.isArray(data)) return data.filter((row): row is Record<string, unknown> => !!row && typeof row === "object");
+  if (Array.isArray(payload)) return payload.filter(isRecord);
+  if (!isRecord(payload)) return [];
+  for (const key of ["data", "lgas", "election_lgas", "result", "results", "items"]) {
+    const value = payload[key];
+    if (Array.isArray(value)) {
+      const rows = value.filter(isRecord);
+      if (rows.length) return rows;
+    }
+    if (isRecord(value)) {
+      const nested = apiRows(value);
+      if (nested.length) return nested;
+    }
   }
   return [];
+}
+
+function apiStateId(payload: unknown): number | null {
+  if (!isRecord(payload)) return null;
+  const state = isRecord(payload.state) ? payload.state : null;
+  const data = isRecord(payload.data) ? payload.data : null;
+  const dataState = data && isRecord(data.state) ? data.state : null;
+  for (const candidate of [payload.state_id, payload.irev_state_id, state?.id, state?._id, data?.state_id, dataState?.id, dataState?._id]) {
+    const value = Number(candidate);
+    if (Number.isInteger(value) && value >= 1 && value <= 37) return value;
+  }
+  return null;
 }
 
 function objectId(value: unknown): string | null {
@@ -303,10 +328,12 @@ async function discoverApiWardStructure(
   electionExternalId: string,
   electionId: string,
   irevStateId: number,
+  diagnostics: Array<Record<string, unknown>>,
 ): Promise<number> {
   const structure = await apiGet(
     base,
     "/elections/" + encodeURIComponent(electionExternalId) + "/lga/state/" + irevStateId,
+    diagnostics,
   );
   const lgas = apiRows(structure);
   if (!lgas.length) return 0;
@@ -442,6 +469,7 @@ Deno.serve(async request => {
     stage = "discover_irev_api";
     const discovered = new Map<string, ReturnType<typeof discoverFromHtml>[number]>();
     const apiDiscovery = await discoverFromIrevApi();
+    const geographyDiagnostics: Array<Record<string, unknown>> = [];
     for (const election of apiDiscovery.elections) discovered.set(election.external_id, election);
 
     stage = "discover_current_irev_directory";
@@ -512,18 +540,25 @@ Deno.serve(async request => {
             ? [stateIdFromApi]
             : parsedStateId
               ? [parsedStateId]
-              : KNOWN_STATE_IDS;
+              : [...KNOWN_STATE_IDS];
 
-          // Some recent IReV elections are constituency/LGA scoped and do not
-          // expose a state id in the election name. The API geography endpoint
-          // remains authoritative, so probe the bounded Nigerian state list
-          // until the election returns a mapped hierarchy.
+          if (!stateIdFromApi && !parsedStateId) {
+            for (const base of API_BASES) {
+              const detail = await apiGet(base, "/elections/" + encodeURIComponent(apiElectionId), geographyDiagnostics);
+              const detailStateId = apiStateId(detail);
+              if (detailStateId) {
+                candidateStateIds.splice(0, candidateStateIds.length, detailStateId);
+                break;
+              }
+            }
+          }
+
           for (const base of API_BASES) {
             for (let offset = 0; offset < candidateStateIds.length && queuedWardJobs === 0; offset += 6) {
               const batch = candidateStateIds.slice(offset, offset + 6);
               const results = await Promise.all(
                 batch.map((candidateStateId) =>
-                  discoverApiWardStructure(base, apiElectionId, String(electionId), candidateStateId),
+                  discoverApiWardStructure(base, apiElectionId, String(electionId), candidateStateId, geographyDiagnostics),
                 ),
               );
               queuedWardJobs = results.reduce((sum, value) => sum + value, 0);
@@ -552,11 +587,11 @@ Deno.serve(async request => {
         max_crawl_pages: MAX_CRAWL_PAGES,
         processed_elections: electionsToProcess.length,
         result_sheets_discovered: resultSheetsDiscovered,
-        elections: electionStats, hierarchy: "IReV API with durable ward queue", homepage: homepageDiagnostics, scanned_directory_pages: scannedDirectoryPages, api_discovery_attempts: apiDiscovery.attempts } }) });
+        elections: electionStats, hierarchy: "IReV API with durable ward queue", homepage: homepageDiagnostics, scanned_directory_pages: scannedDirectoryPages, api_discovery_attempts: apiDiscovery.attempts, geography_diagnostics: geographyDiagnostics.slice(-60) } }) });
     const pipelineError = supabaseError("pipeline_runs insert", pipeline);
     if (pipelineError) throw pipelineError;
 
-    return json({ ok: true, discovered: elections.length, processed: electionsToProcess.length, result_sheets_discovered: resultSheetsDiscovered, elections: electionStats, diagnostics: { homepage: homepageDiagnostics, scanned_directory_pages: scannedDirectoryPages, api_discovery_attempts: apiDiscovery.attempts } });
+    return json({ ok: true, discovered: elections.length, processed: electionsToProcess.length, result_sheets_discovered: resultSheetsDiscovered, elections: electionStats, diagnostics: { homepage: homepageDiagnostics, scanned_directory_pages: scannedDirectoryPages, api_discovery_attempts: apiDiscovery.attempts, geography: geographyDiagnostics.slice(-60) } });
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     return json({ ok: false, stage, error: message }, 500);
