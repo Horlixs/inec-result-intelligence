@@ -210,6 +210,8 @@ export function ElectionProfile(_props: ElectionProfileProps) {
     setSelected("");
   }
 
+  const groupedYears = useMemo(() => { const groups = new Map<string, Election[]>(); for (const row of filtered) { const key = yearOf(row.election_date); groups.set(key, [...(groups.get(key) ?? []), row]); } return [...groups.entries()].sort((a, b) => Number(b[0]) - Number(a[0])); }, [filtered]);
+
   const tabs: Array<{ id: Tab; label: string }> = [
     { id: "overview", label: "Overview" }, { id: "candidates", label: "Candidates" }, { id: "timeline", label: "Timeline" },
     { id: "polling", label: "Polling" }, { id: "results", label: "Results" }, { id: "sources", label: "Sources" },
@@ -262,16 +264,18 @@ export function ElectionProfile(_props: ElectionProfileProps) {
           <div><p className="text-[10px] font-semibold uppercase tracking-[0.18em] text-zinc-600">Available elections</p><p className="mt-1 text-xs text-zinc-600">{filtered.length} matching record{filtered.length === 1 ? "" : "s"}</p></div>
           {(year || category || type || stateId || lgaId || wardId || pollingUnitId) && <button onClick={() => { setYear(""); setCategory(""); setType(""); setStateId(""); setLgaId(""); setWardId(""); setPollingUnitId(""); setGeoElectionIds(null); setSelected(""); }} className="text-xs font-medium text-zinc-500 hover:text-zinc-200">Clear all</button>}
         </div>
-        <div className="mt-3 grid gap-2 sm:grid-cols-2 xl:grid-cols-3">
-          {loading ? [1,2,3].map((item) => <div key={item} className="h-14 animate-pulse rounded-xl bg-zinc-800/40" />) : filtered.length ? filtered.map((row) => {
-            const selectedRow = row.id === selected;
-            return <button key={row.id} onClick={() => { setSelected(row.id); setTab("overview"); }} className={`group flex min-w-0 items-center justify-between gap-3 rounded-xl border px-3.5 py-3 text-left transition-all duration-200 ${selectedRow ? "border-zinc-600 bg-zinc-100 text-zinc-950" : "border-zinc-800/60 bg-zinc-950/35 text-zinc-300 hover:border-zinc-700 hover:bg-zinc-900"}`}>
-              <span className="min-w-0"><span className={`block truncate font-display text-sm font-semibold ${selectedRow ? "text-zinc-950" : "text-zinc-200"}`}>{yearOf(row.election_date)} · {humanElectionType(row.election_type)}</span><span className={`mt-0.5 block truncate text-[11px] ${selectedRow ? "text-zinc-600" : "text-zinc-600"}`}>{row.name}</span></span>
-              <ArrowUpRight size={14} className={selectedRow ? "text-zinc-500" : "shrink-0 text-zinc-700 group-hover:text-zinc-300"} />
-            </button>;
-          }) : <div className="col-span-full rounded-xl border border-dashed border-zinc-800/60 px-5 py-8 text-center text-xs text-zinc-600">No elections match this path. Try stepping back one level or clear a filter.</div>}
-        </div>
-      </div>
+        <div className="mt-3 space-y-5">
+          {loading ? [1,2,3].map((item) => <div key={item} className="h-14 animate-pulse rounded-xl bg-zinc-800/40" />) : groupedYears.length ? groupedYears.map(([groupYear, groupRows]) => (
+            <div key={groupYear}>
+              <div className="mb-2 flex items-center gap-3"><span className="font-display text-sm font-semibold text-zinc-300">{groupYear}</span><span className="h-px flex-1 bg-zinc-800/60" /><span className="text-[10px] uppercase tracking-[0.14em] text-zinc-700">{groupRows.length} election{groupRows.length === 1 ? "" : "s"}</span></div>
+              <div className="grid gap-2 sm:grid-cols-2 xl:grid-cols-3">
+                {groupRows.map((row) => <button key={row.id} onClick={() => { setSelected(row.id); setTab("overview"); }} className="group flex min-w-0 items-center justify-between gap-3 rounded-xl border border-zinc-800/60 bg-zinc-950/35 px-3.5 py-3 text-left transition-all duration-200 hover:border-zinc-700 hover:bg-zinc-900">
+                  <span className="min-w-0"><span className="block truncate font-display text-sm font-semibold text-zinc-200">{humanElectionType(row.election_type)}</span><span className="mt-0.5 block truncate text-[11px] text-zinc-600">{row.name}</span></span><ArrowUpRight size={14} className="shrink-0 text-zinc-700 group-hover:text-zinc-300" />
+                </button>)}
+              </div>
+            </div>
+          )) : <div className="rounded-xl border border-dashed border-zinc-800/60 px-5 py-8 text-center text-xs text-zinc-600">No elections match this path. Try stepping back one level or clear a filter.</div>}
+        </div>     </div>
     </div>
 
     <div className="mt-5 min-w-0">
