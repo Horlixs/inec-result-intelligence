@@ -187,7 +187,7 @@ export function ElectionProfile(_props: ElectionProfileProps) {
         setGeoElectionIds([]);
         setError("The selected geographic scope could not be matched to the available result records.");
       } else {
-        setGeoElectionIds([...new Set((response.data ?? []).map((row) => String(row)))]);
+        setGeoElectionIds([...new Set((response.data ?? []) as string[])]);
       }
       setGeoReady(true);
       setGeoLoading(false);
