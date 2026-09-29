@@ -93,6 +93,7 @@ export function ElectionProfile({ selectedElectionId, onElectionSelect, onBackTo
   const [tab, setTab] = useState<Tab>("overview");
   const [loading, setLoading] = useState(true);
   const [selectedElection, setSelectedElection] = useState<Election | null>(null);
+  const [selectionLoading, setSelectionLoading] = useState(Boolean(selectedElectionId));
   const [geoLoading, setGeoLoading] = useState(false);
   const [error, setError] = useState("");
   const [geoElectionIds, setGeoElectionIds] = useState<string[] | null>(null);
@@ -100,17 +101,30 @@ export function ElectionProfile({ selectedElectionId, onElectionSelect, onBackTo
 
   async function load(): Promise<void> {
     setLoading(true); setError("");
-    if (!supabase) { setError("Supabase is not configured in this deployment."); setLoading(false); return; }
+    if (selectedElectionId) setSelectionLoading(true);
+    if (!supabase) { setError("Supabase is not configured in this deployment."); setLoading(false); setSelectionLoading(false); return; }
     const [electionsResponse, statesResponse] = await Promise.all([
       supabase.from("elections").select("id,name,election_type,election_date,source_url,status").order("election_date", { ascending: true }),
       supabase.from("states").select("id,name,code").order("name", { ascending: true }),
     ]);
-    if (electionsResponse.error) { setError(electionsResponse.error.message); setLoading(false); return; }
+    if (electionsResponse.error) { setError(electionsResponse.error.message); setLoading(false); setSelectionLoading(false); return; }
     const loadedRows = (electionsResponse.data ?? []) as Election[];
     setRows(loadedRows);
-    if (selectedElectionId) setSelectedElection(loadedRows.find((row) => row.id === selectedElectionId) ?? null);
     setStates((statesResponse.data ?? []) as State[]);
+    if (selectedElectionId) {
+      const matched = loadedRows.find((row) => row.id === selectedElectionId);
+      if (matched) {
+        setSelectedElection(matched);
+      } else {
+        const directResponse = await supabase.from("elections").select("id,name,election_type,election_date,source_url,status").eq("id", selectedElectionId).maybeSingle();
+        if (directResponse.error) setError(`Election could not be loaded: ${directResponse.error.message}`);
+        setSelectedElection((directResponse.data ?? null) as Election | null);
+      }
+    } else {
+      setSelectedElection(null);
+    }
     setLoading(false);
+    setSelectionLoading(false);
   }
 
   useEffect(() => { void load(); }, [selectedElectionId]);
@@ -289,7 +303,7 @@ export function ElectionProfile({ selectedElectionId, onElectionSelect, onBackTo
     <div className="mt-5 min-w-0">
       {election && <div className="mb-4 flex items-center gap-2 text-xs"><button onClick={clearElection} className="text-zinc-500 hover:text-zinc-200">Elections</button><ChevronRight size={12} className="text-zinc-700" /><span className="truncate text-zinc-300">{election.name}</span></div>}
       {error && <div className="mb-5 flex items-start gap-3 rounded-2xl border border-amber-500/20 bg-amber-500/5 p-4 text-sm text-amber-200"><XCircle size={18} className="mt-0.5 shrink-0" /><div><p className="font-medium">Data connection notice</p><p className="mt-1 text-xs text-amber-200/60">{error}</p></div></div>}
-      {election ? <>
+      {selectionLoading ? <div className="rounded-2xl border border-zinc-800/60 bg-zinc-900/30 p-12 text-center"><RefreshCw className="mx-auto animate-spin text-zinc-700" size={24} /><p className="mt-3 text-sm text-zinc-500">Loading election record…</p></div> : election ? <>
         <div className="rounded-2xl border border-zinc-800/60 bg-zinc-900/35 p-5 sm:p-6">
           <div className="flex flex-col justify-between gap-5 sm:flex-row sm:items-start">
             <div className="min-w-0">
@@ -326,7 +340,7 @@ export function ElectionProfile({ selectedElectionId, onElectionSelect, onBackTo
           <div className="rounded-2xl border border-zinc-800/60 bg-zinc-900/35 p-5"><p className="text-[10px] font-semibold uppercase tracking-[0.18em] text-zinc-600">Explore related</p><h3 className="mt-2 font-display text-lg font-semibold text-zinc-100">More elections in this area</h3><div className="mt-4 space-y-2">{relatedElections.map((item) => <button key={item.id} onClick={() => { selectElection(item.id); }} className="flex w-full items-center justify-between rounded-xl border border-zinc-800/60 bg-zinc-950/35 px-3.5 py-3 text-left hover:border-zinc-700 hover:bg-zinc-900"><span><span className="block text-sm font-medium text-zinc-200">{humanElectionType(item.election_type)}</span><span className="text-[11px] text-zinc-600">{item.name}</span></span><ArrowUpRight size={14} className="text-zinc-700" /></button>)}</div></div>
           <div className="rounded-2xl border border-zinc-800/60 bg-zinc-900/35 p-5"><p className="text-[10px] font-semibold uppercase tracking-[0.18em] text-zinc-600">Explore others</p><h3 className="mt-2 font-display text-lg font-semibold text-zinc-100">Other elections</h3><div className="mt-4 space-y-2">{otherElections.map((item) => <button key={item.id} onClick={() => selectElection(item.id)} className="flex w-full items-center justify-between rounded-xl border border-zinc-800/60 bg-zinc-950/35 px-3.5 py-3 text-left hover:border-zinc-700 hover:bg-zinc-900"><span><span className="block text-sm font-medium text-zinc-200">{humanElectionType(item.election_type)}</span><span className="text-[11px] text-zinc-600">{item.name}</span></span><ArrowUpRight size={14} className="text-zinc-700" /></button>)}</div></div>
         </div>
-      </> : <div className="rounded-2xl border border-zinc-800/60 bg-zinc-900/30 p-12 text-center"><FileImage className="mx-auto text-zinc-700" size={32} /><h3 className="mt-4 font-display text-lg font-semibold">No election selected</h3><p className="mt-2 text-sm text-zinc-600">Choose an election from the directory to view its result evidence.</p></div>}
+      </> : <div className="rounded-2xl border border-zinc-800/60 bg-zinc-900/30 p-12 text-center"><FileImage className="mx-auto text-zinc-700" size={32} /><h3 className="mt-4 font-display text-lg font-semibold">{selectedElectionId ? "Election record not found" : "No election selected"}</h3><p className="mt-2 text-sm text-zinc-600">{selectedElectionId ? "The requested election could not be found in the intelligence database." : "Choose an election from the directory to view its result evidence."}</p></div>}
     </div>
   </section>;
 }
