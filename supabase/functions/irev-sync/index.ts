@@ -121,7 +121,15 @@ async function discoverFromIrevApi() {
       if (!id) continue;
       const name = String(row.full_name ?? row.name ?? row.title ?? row.election_name ?? id).trim();
       const electionDate = String(row.election_date ?? row.date ?? "").trim() || null;
-      found.set("irev:" + id, { external_id: "irev:" + id, name, election_type: classifyElection(name), election_date: electionDate, source_url: ORIGIN + "/elections/" + id, status: "discovered" });
+      found.set("irev:" + id, {
+        external_id: "irev:" + id,
+        name,
+        election_type: classifyElection(name),
+        election_date: electionDate,
+        source_url: ORIGIN + "/elections/" + id,
+        status: "discovered",
+        ...(Number.isFinite(Number(row.state_id)) ? { irev_state_id: Number(row.state_id) } : {}),
+      } as ReturnType<typeof discoverFromHtml>[number] & { irev_state_id?: number });
     }
   };
 
