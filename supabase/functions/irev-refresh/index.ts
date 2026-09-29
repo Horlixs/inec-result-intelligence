@@ -263,6 +263,7 @@ Deno.serve(async request => {
 
   try {
     const discovery = await invoke("irev-sync", { mode: "scheduled-refresh" });
+    const wardJobs = await drainWardJobs(20);
     const queued = await enqueueDiscoveredSheets();
 
     let processed = 0;
