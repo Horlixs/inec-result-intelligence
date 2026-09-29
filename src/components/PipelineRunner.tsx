@@ -4,49 +4,50 @@ import { supabase } from "../lib/supabase";
 
 interface PipelineRunnerProps {}
 interface SyncResponse { ok?: boolean; error?: string; discovered?: number; }
-interface SheetRow { id: string; }
+interface BatchResponse { ok?: boolean; error?: string; processed?: number; failed?: number; remaining?: number; ward_jobs?: { processed?: number; failed?: number }; }
 
 export function PipelineRunner(_props: PipelineRunnerProps) {
   const [running, setRunning] = useState(false);
   const [message, setMessage] = useState("");
   const [error, setError] = useState(false);
 
+  async function post(path: string, body: unknown) {
+    const response = await fetch(path, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+    const data = await response.json().catch(() => ({}));
+    if (!response.ok || !data?.ok) throw new Error(data?.error ?? `Request failed with HTTP ${response.status}.`);
+    return data as BatchResponse;
+  }
+
   async function run(): Promise<void> {
-    setRunning(true); setMessage("Discovering elections and result sheets…"); setError(false);
+    setRunning(true); setError(false); setMessage("Discovering elections and queueing IReV wards…");
     try {
       if (!supabase) throw new Error("Supabase is not configured.");
-      const client = supabase;
-      const response = await fetch("/api/irev-sync", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ mode: "discover" }),
-      });
-      const responseData = await response.json() as SyncResponse;
-      if (!response.ok || !responseData?.ok) throw new Error(responseData?.error ?? `The collector returned HTTP ${response.status}.`);
+      const discoveryResponse = await fetch("/api/irev-sync", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ mode: "discover" }) });
+      const discovery = await discoveryResponse.json() as SyncResponse;
+      if (!discoveryResponse.ok || !discovery?.ok) throw new Error(discovery?.error ?? `Discovery failed with HTTP ${discoveryResponse.status}.`);
 
-      const sheetResponse = await client.from("result_sheets").select("id").order("discovered_at", { ascending: true });
-      if (sheetResponse.error) throw sheetResponse.error;
-      const ids = ((sheetResponse.data ?? []) as SheetRow[]).map((row) => row.id);
-      if (!ids.length) { setMessage(`Discovery complete — ${responseData.discovered ?? 0} elections found. No result-sheet source links are available yet.`); return; }
-      let completed = 0; let failed = 0; const concurrency = 3;
-      setMessage(`Refreshing ${ids.length} result sheets…`);
-      for (let index = 0; index < ids.length; index += concurrency) {
-        const batch = ids.slice(index, index + concurrency);
-        const results = await Promise.all(batch.map(async (id: string): Promise<boolean> => {
-          const result = await fetch("/api/irev-process", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ result_sheet_id: id }),
-          });
-          if (!result.ok) return false;
-          const data = await result.json() as { ok?: boolean };
-          return data.ok === true;
-        }));
-        completed += results.filter(Boolean).length; failed += results.filter((value: boolean) => !value).length;
-        setMessage(`Processing result sheets… ${completed}/${ids.length} completed, ${failed} failed.`);
+      let remaining = Number.POSITIVE_INFINITY;
+      let batchNumber = 0;
+      let wards = 0;
+      let sheets = 0;
+      let failures = 0;
+      setMessage(`Discovery complete — ${discovery.discovered ?? 0} elections found. Processing in bounded batches…`);
+
+      while (remaining > 0) {
+        batchNumber++;
+        const batch = await post("/api/irev-batch", {});
+        const wardCount = batch.ward_jobs?.processed ?? 0;
+        const sheetCount = batch.processed ?? 0;
+        wards += wardCount;
+        sheets += sheetCount;
+        failures += batch.failed ?? 0;
+        remaining = batch.remaining ?? 0;
+        setMessage(`Batch ${batchNumber}: ${wardCount} wards + ${sheetCount} result sheets processed. ${remaining} jobs remaining${failures ? `, ${failures} failed/retried` : ""}.`);
+        if (wardCount === 0 && sheetCount === 0 && remaining > 0) throw new Error("The queue still contains jobs, but this batch made no progress. Check the pipeline logs.");
       }
-      setMessage(`Refresh complete — ${responseData.discovered ?? 0} elections discovered, ${ids.length} source URLs checked, ${failed} failed.`);
-      setError(failed > 0);
+
+      setMessage(`Pipeline complete — ${wards} ward jobs and ${sheets} result-sheet jobs processed.`);
+      setError(failures > 0);
     } catch (caught: unknown) {
       setError(true); setMessage(caught instanceof Error ? caught.message : "The pipeline could not be completed.");
     } finally { setRunning(false); }
