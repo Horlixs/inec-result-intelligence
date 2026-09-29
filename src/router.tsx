@@ -1,4 +1,4 @@
-import { createRootRoute, createRoute, createRouter, Link, Outlet, Navigate, useNavigate, useParams } from "@tanstack/react-router";
+import { createRootRoute, createRoute, createRouter, Link, Navigate, useNavigate, useParams } from "@tanstack/react-router";
 import { AppShell } from "./AppShell";
 import { ElectionDirectory, ElectionYearPage } from "./components/ElectionDirectory";
 import { ElectionProfile } from "./components/ElectionProfile";
