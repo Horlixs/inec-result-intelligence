@@ -327,3 +327,4 @@ export function ElectionProfile({ selectedElectionId, onElectionSelect, onBackTo
     </div>
   </section>;
 }
+}
