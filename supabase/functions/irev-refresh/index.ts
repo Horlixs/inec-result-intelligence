@@ -212,6 +212,12 @@ async function drainWardJobs(maxJobs: number) {
   return { processed, failed };
 }
 
+function errorMessage(error: unknown): string {
+  if (error instanceof Error) return error.message;
+  if (typeof error === "string") return error;
+  try { return JSON.stringify(error); } catch { return String(error); }
+}
+
 async function invoke(name: string, body: unknown) {
   const response = await fetch(url.replace(/\/$/, "") + "/functions/v1/" + name, {
     method: "POST",
@@ -223,7 +229,7 @@ async function invoke(name: string, body: unknown) {
   });
   const data = await response.json().catch(() => ({}));
   if (!response.ok || data?.ok === false) {
-    throw new Error(data?.error || name + " failed with HTTP " + response.status);
+    throw new Error(name + " failed with HTTP " + response.status + ": " + errorMessage(data?.error ?? data?.message ?? data));
   }
   return data;
 }
@@ -296,16 +302,21 @@ Deno.serve(async request => {
   }
 
   const started = new Date().toISOString();
+  let stage = "startup";
 
   try {
+    stage = "irev-sync";
     const discovery = await invoke("irev-sync", { mode: "scheduled-refresh" });
+    stage = "drain-ward-jobs";
     const wardJobs = await drainWardJobs(5);
+    stage = "enqueue-discovered-sheets";
     const queued = await enqueueDiscoveredSheets();
 
     let processed = 0;
     let failed = 0;
 
     for (let i = 0; i < MAX_JOBS_PER_REFRESH; i++) {
+      stage = "process-result-sheet";
       const job = await claimJob();
       if (!job) break;
 
@@ -367,18 +378,21 @@ Deno.serve(async request => {
       headers: { "content-type": "application/json" },
     });
   } catch (error) {
+    const message = errorMessage(error);
+    console.error("IReV refresh failed", { stage, error: message });
     await supabase.from("pipeline_runs").insert({
       started_at: started,
       finished_at: new Date().toISOString(),
       status: "failed",
       trigger_source: "scheduled",
       failed: 1,
-      issues: [{ message: error instanceof Error ? error.message : String(error) }],
+      issues: [{ stage, message }],
     });
 
     return new Response(JSON.stringify({
       ok: false,
-      error: error instanceof Error ? error.message : String(error),
+      error: message,
+      stage,
     }), {
       status: 500,
       headers: { "content-type": "application/json" },
