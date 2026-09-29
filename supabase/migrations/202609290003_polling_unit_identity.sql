@@ -1,30 +1,40 @@
 -- Polling-unit names are not unique within a ward in the INEC snapshot.
 -- The real stable key is the polling-unit code within its ward.
 
-with duplicates as (
+with ranked as (
   select
     id,
-    min(id) over (partition by ward_id, pu_code) as keep_id
+    ward_id,
+    pu_code,
+    first_value(id) over (
+      partition by ward_id, pu_code
+      order by id
+      rows between unbounded preceding and unbounded following
+    ) as keep_id
   from public.polling_units
   where pu_code is not null
 )
 update public.result_sheets rs
-set polling_unit_id = d.keep_id
-from duplicates d
-where rs.polling_unit_id = d.id
-  and d.id <> d.keep_id;
+set polling_unit_id = r.keep_id
+from ranked r
+where rs.polling_unit_id = r.id
+  and r.id <> r.keep_id;
 
-with duplicates as (
+with ranked as (
   select
     id,
-    min(id) over (partition by ward_id, pu_code) as keep_id
+    first_value(id) over (
+      partition by ward_id, pu_code
+      order by id
+      rows between unbounded preceding and unbounded following
+    ) as keep_id
   from public.polling_units
   where pu_code is not null
 )
 delete from public.polling_units pu
-using duplicates d
-where pu.id = d.id
-  and d.id <> d.keep_id;
+using ranked r
+where pu.id = r.id
+  and r.id <> r.keep_id;
 
 alter table public.polling_units
   drop constraint if exists polling_units_ward_id_name_key;
