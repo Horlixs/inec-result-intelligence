@@ -1,0 +1,17 @@
+name: IReV Ward API Diagnostic
+
+on:
+  push:
+    paths:
+      - "scripts/irev-debug-ward.mjs"
+      - ".github/workflows/irev-debug-ward.yml"
+  workflow_dispatch:
+
+jobs:
+  inspect:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - name: Inspect exact IReV ward response
+        run: node scripts/irev-debug-ward.mjs
