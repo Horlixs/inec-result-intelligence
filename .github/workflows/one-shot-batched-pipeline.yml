@@ -7,7 +7,6 @@ on:
 
 jobs:
   patch:
-    if: github.event_name == 'workflow_dispatch' || !contains(github.event.head_commit.message, 'fix: process IReV queue in resumable batches')
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -225,9 +224,11 @@ export function PipelineRunner(_props: PipelineRunnerProps) {
 }
 ''')
 
+          workflow = Path('.github/workflows/one-shot-batched-pipeline.yml')
+          workflow.unlink()
+
           subprocess.run(['git','config','user.name','github-actions[bot]'], check=True)
           subprocess.run(['git','config','user.email','41898282+github-actions[bot]@users.noreply.github.com'], check=True)
-          subprocess.run(['git','rm','--cached','.github/workflows/one-shot-batched-pipeline.yml'], check=False)
-          subprocess.run(['git','add','supabase/functions/irev-refresh/index.ts','src/components/PipelineRunner.tsx','api/irev-refresh.js','.github/workflows/one-shot-batched-pipeline.yml'], check=True)
+          subprocess.run(['git','add','-A'], check=True)
           subprocess.run(['git','commit','-m','fix: process IReV queue in resumable batches'], check=True)
           subprocess.run(['git','push'], check=True)
