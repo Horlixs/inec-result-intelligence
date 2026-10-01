@@ -166,7 +166,7 @@ function extractDocumentUrl(row: Record<string, unknown>): { url: string; docume
     if (url.protocol !== "https:") return null;
 
     const documentId = String(
-      document?._id ?? row.document_id ?? ""
+      nestedDocument?._id ?? row.document_id ?? ""
     ).trim() || null;
 
     return { url: url.toString(), documentId };
@@ -187,7 +187,7 @@ async function resolveCanonicalIrevSource(
   }
 
   const match = parsed.pathname.match(
-    /^\\/elections\\/([^/]+)\\/pu\\/([^/]+)\\/document(?:\\/)?$/,
+    /^\/elections\/([^/]+)\/pu\/([^/]+)\/document(?:\/)?$/,
   );
   if (!match) return { url: sourceUrl, documentId: null };
 
@@ -307,7 +307,7 @@ async function resolveCanonicalIrevSource(
   }
 
   const normaliseName = (value: unknown) =>
-    String(value ?? "").trim().toLowerCase().replace(/\\s+/g, " ");
+    String(value ?? "").trim().toLowerCase().replace(/\s+/g, " ");
 
   const targetExternalId = String(pollingUnit.external_id ?? "").trim();
   const targetCode = String(pollingUnit.pu_code ?? "").trim();
