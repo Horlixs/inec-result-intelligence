@@ -1,0 +1,27 @@
+name: IReV OCR Smoke Process
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - ".github/workflows/irev-ocr-smoke.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  smoke:
+    runs-on: ubuntu-slim
+    steps:
+      - name: Process one queued result sheet
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_PUBLISHABLE_KEY: ${{ secrets.SUPABASE_PUBLISHABLE_KEY }}
+        run: |
+          set -euo pipefail
+          test -n "$SUPABASE_URL"
+          test -n "$SUPABASE_PUBLISHABLE_KEY"
+
+          response=$(curl --fail-with-body --silent --show-error             -X POST "$SUPABASE_URL/functions/v1/irev-batch"             -H "Authorization: Bearer $SUPABASE_PUBLISHABLE_KEY"             -H "apikey: $SUPABASE_PUBLISHABLE_KEY"             -H "Content-Type: application/json"             -d '{}')
+
+          echo "$response"
