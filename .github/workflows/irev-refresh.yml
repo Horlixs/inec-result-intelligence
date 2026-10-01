@@ -5,11 +5,16 @@ on:
     paths:
       - ".github/workflows/irev-refresh.yml"
   schedule:
-    - cron: "17 * * * *"
+    # Remote worker: refresh discovery/queue every 5 minutes without user activity.
+    - cron: "2/5 * * * *"
   workflow_dispatch:
   workflow_run:
     workflows: ["Deploy Supabase Edge Functions"]
     types: [completed]
+
+concurrency:
+  group: irev-refresh
+  cancel-in-progress: false
 
 jobs:
   refresh:
@@ -22,6 +27,7 @@ jobs:
           SUPABASE_ANON_KEY: ${{ secrets.SUPABASE_ANON_KEY }}
           GITHUB_EVENT_NAME: ${{ github.event_name }}
         run: |
+          set -euo pipefail
           test -n "$SUPABASE_URL"
           test -n "$SUPABASE_ANON_KEY"
 
@@ -30,7 +36,7 @@ jobs:
             FORCE_REFRESH=true
           fi
 
-          curl --fail-with-body --silent --show-error \
+          curl --fail-with-body --silent --show-error --max-time 140 \
             -X POST "$SUPABASE_URL/functions/v1/irev-refresh" \
             -H "Authorization: Bearer $SUPABASE_ANON_KEY" \
             -H "apikey: $SUPABASE_ANON_KEY" \
