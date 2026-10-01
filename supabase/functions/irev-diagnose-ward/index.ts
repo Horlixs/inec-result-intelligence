@@ -60,6 +60,27 @@ function findWard(payload: unknown, targetOid: string) {
   return null;
 }
 
+function hierarchyWardInventory(payload: unknown) {
+  const out: Array<Record<string, unknown>> = [];
+  for (const candidate of arrays(payload)) {
+    for (const lga of candidate.values) {
+      const wards = Array.isArray(lga.wards) ? lga.wards : [];
+      for (const raw of wards) {
+        if (!isRecord(raw)) continue;
+        out.push({
+          oid: objectId(raw._id),
+          numeric_id: Number.isInteger(Number(raw.ward_id ?? raw.id)) ? Number(raw.ward_id ?? raw.id) : null,
+          name: raw.name ?? raw.ward_name ?? null,
+          lga_oid: objectId(lga._id),
+          lga_name: lga.name ?? lga.lga_name ?? null,
+        });
+        if (out.length >= 100) return out;
+      }
+    }
+  }
+  return out;
+}
+
 function rows(payload: unknown) {
   if (Array.isArray(payload)) return payload.filter(isRecord);
   if (!isRecord(payload)) return [];
@@ -153,6 +174,7 @@ Deno.serve(async request => {
         },
         resolved: null,
         polling_units: null,
+        ward_inventory: hierarchyWardInventory(hierarchy.body),
         note: "The requested value was not found as a ward OID inside the election LGA hierarchy.",
       });
     }
