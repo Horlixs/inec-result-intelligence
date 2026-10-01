@@ -23,6 +23,11 @@ type ScopeProps = {
 
 interface TotalRow {
   label: string;
+  candidate_id?: string | null;
+  candidate_name?: string | null;
+  party_id?: string | null;
+  party_abbreviation?: string | null;
+  party_name?: string | null;
   total_votes: number | null;
   polling_units_with_entry: number | null;
   verified_result_sheets: number | null;
@@ -83,7 +88,7 @@ export function ResultsExplorer({
         const candidatePromise = supabase!.from("candidates").select("id,name,party_id,ballot_order").eq("election_id", electionId).order("ballot_order", { ascending: true, nullsFirst: false }).order("name");
         const recordPromise = supabase!.from("candidate_records").select("candidate_id,full_name,party_id,ballot_order").eq("election_id", electionId).eq("status", "published").is("valid_to", null).order("ballot_order", { ascending: true, nullsFirst: false });
         const partyPromise = supabase!.from("parties").select("id,abbreviation,name").order("abbreviation");
-        const identityPromise = supabase!.from("verified_result_entries_enriched").select("label,candidate_name,party_abbreviation,party_name").eq("election_id", electionId).limit(5000);
+        const identityPromise = Promise.resolve({ data: [], error: null });
 
         const [candidateRes, recordRes, partyRes, identityRes] = await Promise.all([candidatePromise, recordPromise, partyPromise, identityPromise]);
         if (candidateRes.error) throw candidateRes.error;
@@ -107,14 +112,14 @@ export function ResultsExplorer({
           if (result.error) throw result.error;
           setRows((result.data ?? []).map((r:any) => ({label:r.label,total_votes:r.votes,polling_units_with_entry:1,verified_result_sheets:1})));
         } else if (stateId) {
-          let q = supabase!.from("geographic_candidate_totals").select("label,total_votes,polling_units_with_entry,verified_result_sheets").eq("election_id", electionId).eq("state_id", stateId);
+          let q = supabase!.from("geographic_candidate_totals").select("label,candidate_id,candidate_name,party_id,party_abbreviation,party_name,total_votes,polling_units_with_entry,verified_result_sheets").eq("election_id", electionId).eq("state_id", stateId);
           if (lgaId) q = q.eq("lga_id", lgaId);
           if (wardId) q = q.eq("ward_id", wardId);
           const result = await q.order("total_votes", {ascending:false, nullsFirst:false}).order("label");
           if (result.error) throw result.error;
           setRows((result.data ?? []) as TotalRow[]);
         } else {
-          const result = await supabase!.from("election_candidate_totals").select("label,total_votes,polling_units_with_entry,verified_result_sheets").eq("election_id", electionId).order("total_votes", {ascending:false, nullsFirst:false}).order("label");
+          const result = await supabase!.from("election_candidate_totals").select("label,candidate_id,candidate_name,party_id,party_abbreviation,party_name,total_votes,polling_units_with_entry,verified_result_sheets").eq("election_id", electionId).order("total_votes", {ascending:false, nullsFirst:false}).order("label");
           if (result.error) throw result.error;
           setRows((result.data ?? []) as TotalRow[]);
         }
@@ -175,22 +180,18 @@ export function ResultsExplorer({
     for (const r of rows) values.set(r.label, r);
     return candidates.map((c) => {
       const party = c.party_id ? partyMap.get(c.party_id) : undefined;
-      const match = rows.find((r) => {
-        const id = identityMap.get(r.label);
-        return id?.candidate_name?.toLowerCase() === c.name.toLowerCase() || r.label.toLowerCase() === c.name.toLowerCase();
-      });
+      const match = rows.find((r) => r.candidate_id === c.id || r.candidate_name?.toLowerCase() === c.name.toLowerCase() || r.label.toLowerCase() === c.name.toLowerCase());
       return {
         label: match?.label ?? c.name,
         candidate: c.name,
-        party: party?.abbreviation ?? identityMap.get(match?.label ?? "")?.party_abbreviation ?? "—",
-        partyName: party?.name ?? identityMap.get(match?.label ?? "")?.party_name ?? null,
+        party: party?.abbreviation ?? match?.party_abbreviation ?? "—",
+        partyName: party?.name ?? match?.party_name ?? null,
         votes: match?.total_votes ?? 0,
         units: match?.polling_units_with_entry ?? 0,
         sheets: match?.verified_result_sheets ?? 0,
       };
     }).concat(rows.filter((r) => !candidateByName.has((identityMap.get(r.label)?.candidate_name ?? r.label).toLowerCase())).map((r) => {
-      const i = identityMap.get(r.label);
-      return { label:r.label, candidate:i?.candidate_name ?? "Identity not linked", party:i?.party_abbreviation ?? "—", partyName:i?.party_name ?? null, votes:r.total_votes ?? 0, units:r.polling_units_with_entry ?? 0, sheets:r.verified_result_sheets ?? 0 };
+      return { label:r.label, candidate:r.candidate_name ?? "Identity not linked", party:r.party_abbreviation ?? "—", partyName:r.party_name ?? null, votes:r.total_votes ?? 0, units:r.polling_units_with_entry ?? 0, sheets:r.verified_result_sheets ?? 0 };
     })).sort((a,b) => b.votes-a.votes || a.label.localeCompare(b.label));
   }, [rows,candidates,partyMap,identityMap,candidateByName]);
 
