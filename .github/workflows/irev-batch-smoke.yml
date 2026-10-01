@@ -1,25 +1,23 @@
 name: IReV Batch Smoke
 
 on:
+  workflow_dispatch:
   push:
     paths:
       - ".github/workflows/irev-batch-smoke.yml"
-  workflow_dispatch:
 
 jobs:
-  smoke:
+  inspect:
     runs-on: ubuntu-latest
     steps:
-      - name: Invoke IReV batch
+      - name: Inspect processing state
         env:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
-          SUPABASE_ANON_KEY: ${{ secrets.SUPABASE_ANON_KEY }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
         run: |
           test -n "$SUPABASE_URL"
-          test -n "$SUPABASE_ANON_KEY"
+          test -n "$SUPABASE_SERVICE_ROLE_KEY"
           curl --fail-with-body --silent --show-error \
-            -X POST "$SUPABASE_URL/functions/v1/irev-batch" \
-            -H "Authorization: Bearer $SUPABASE_ANON_KEY" \
-            -H "apikey: $SUPABASE_ANON_KEY" \
-            -H "Content-Type: application/json" \
-            -d '{"trigger":"smoke"}'
+            "$SUPABASE_URL/rest/v1/result_processing_jobs?select=id,result_sheet_id,status,attempts,last_error,updated_at&order=updated_at.desc&limit=10" \
+            -H "apikey: $SUPABASE_SERVICE_ROLE_KEY" \
+            -H "Authorization: Bearer $SUPABASE_SERVICE_ROLE_KEY"
