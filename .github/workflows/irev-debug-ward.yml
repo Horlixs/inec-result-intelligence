@@ -11,7 +11,15 @@ jobs:
   inspect:
     runs-on: ubuntu-latest
     timeout-minutes: 5
+    env:
+      IREV_API_KEY: ${{ secrets.IREV_API_KEY }}
     steps:
       - uses: actions/checkout@v4
-      - name: Inspect exact IReV ward response
+      - name: Verify IReV diagnostic credential is configured
+        run: |
+          if [ -z "$IREV_API_KEY" ]; then
+            echo "::error::GitHub Secret IREV_API_KEY is not configured."
+            exit 1
+          fi
+      - name: Inspect IReV LGA hierarchy and resolved ward response
         run: node scripts/irev-debug-ward.mjs
