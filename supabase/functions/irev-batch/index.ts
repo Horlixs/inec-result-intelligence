@@ -223,7 +223,7 @@ async function processWard(job: Record<string, unknown>) {
   if (puRowsToUpsert.length) {
     const { error } = await supabase
       .from("polling_units")
-      .upsert(puRowsToUpsert, { onConflict: "ward_id,name", ignoreDuplicates: false });
+      .upsert(puRowsToUpsert, { onConflict: "ward_id,pu_code", ignoreDuplicates: false });
     if (error) throw error;
   }
 
@@ -353,7 +353,7 @@ Deno.serve(async request => {
         wardProcessed++;
       } catch (error) {
         wardFailed++;
-        wardDiagnostics.push({ election_id: job.election_id, ward_id: job.ward_id, error: error instanceof Error ? error.message : String(error) });
+        wardDiagnostics.push({ election_id: job.election_id, ward_id: job.ward_id, error: errorMessage(error) });
         await finishWard(job.job_id, Number(job.attempts), false, error instanceof Error ? error.message : String(error));
       }
     }
