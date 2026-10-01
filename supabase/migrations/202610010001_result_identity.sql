@@ -39,3 +39,5 @@ grant select on public.verified_result_entries_enriched to anon, authenticated;
 
 comment on view public.verified_result_entries_enriched is
   'Verified result entries enriched with canonical candidate and political-party metadata when those identities have been synchronized.';
+
+-- deployment checkpoint
