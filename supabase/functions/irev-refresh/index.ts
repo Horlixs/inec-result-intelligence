@@ -206,6 +206,8 @@ async function processWardJob(job: Record<string, unknown>) {
 
     if (existing.error) throw existing.error;
 
+    // A polling-unit without a document is not an OCR failure. Keep the PU,
+    // but never create an artificial /document SPA route.
     if (!url) {
       const staleIds = (existing.data ?? [])
         .filter(sheet => sheet.source_url?.includes("/pu/") && sheet.source_url?.endsWith("/document"))
@@ -290,113 +292,7 @@ async function processWardJob(job: Record<string, unknown>) {
       sheets++;
       continue;
     }
-const existing = await supabase
-      .from("result_sheets")
-      .select("id,status,source_url")
-      .eq("election_id", electionId)
-      .eq("polling_unit_id", pollingUnitId)
-      .order("discovered_at", { ascending: false })
-      .limit(20);
 
-    if (existing.error) throw existing.error;
-
-    if (!url) {
-      const fallbackIds = (existing.data ?? [])
-        .filter(sheet => fallbackUrl && sheet.source_url === fallbackUrl)
-        .map(sheet => sheet.id);
-
-      if (fallbackIds.length) {
-        const { error: retireError } = await supabase
-          .from("result_sheets")
-          .update({
-            status: "skipped",
-            last_error: "IReV polling-unit record has no document asset",
-            evidence_status: "remote_only",
-            updated_at: new Date().toISOString(),
-          })
-          .in("id", fallbackIds);
-        if (retireError) throw retireError;
-
-        const { error: jobError } = await supabase
-          .from("result_processing_jobs")
-          .delete()
-          .in("result_sheet_id", fallbackIds);
-        if (jobError) throw jobError;
-      }
-
-      continue;
-    }
-
-    rowsWithDocuments++;
-
-    const hasDirectDocument =
-      !!row.document ||
-      !!row.url ||
-      !!row.file_url ||
-      !!row.document_url ||
-      !!(nestedPu && (nestedPu.document || nestedPu.url || nestedPu.file_url || nestedPu.document_url));
-
-    if (!hasDirectDocument) constructedDocuments++;
-
-    const document =
-      row.document && typeof row.document === "object"
-        ? row.document as Record<string, unknown>
-        : nestedPu?.document && typeof nestedPu.document === "object"
-          ? nestedPu.document as Record<string, unknown>
-          : {};
-
-    const sourceExternalId = String(
-      document._id ??
-      row.document_id ??
-      nestedPu?.document_id ??
-      puExternalId ??
-      url,
-    );
-
-    const fallbackSheet = fallbackUrl
-      ? (existing.data ?? []).find(sheet => sheet.source_url === fallbackUrl)
-      : null;
-
-    if (fallbackSheet) {
-      const { error: updateError } = await supabase
-        .from("result_sheets")
-        .update({
-          source_url: url,
-          source_external_id: sourceExternalId,
-          status: "discovered",
-          evidence_status: "remote_only",
-          storage_policy: "ephemeral",
-          discovered_at: new Date().toISOString(),
-          last_error: null,
-          processing_attempts: 0,
-          processed_at: null,
-        })
-        .eq("id", fallbackSheet.id);
-      if (updateError) throw updateError;
-
-      const { error: resetJobError } = await supabase
-        .from("result_processing_jobs")
-        .delete()
-        .eq("result_sheet_id", fallbackSheet.id);
-      if (resetJobError) throw resetJobError;
-
-      const { error: queueJobError } = await supabase
-        .from("result_processing_jobs")
-        .insert({
-          result_sheet_id: fallbackSheet.id,
-          status: "queued",
-          attempts: 0,
-          available_at: new Date().toISOString(),
-        });
-      if (queueJobError) throw queueJobError;
-
-      sheets++;
-      continue;
-    }
-
-    // Discovery is idempotent. Existing sheets must retain their terminal
-    // processing state (verified/pending_review/failed) and must never be
-    // reset to "discovered" merely because the sync sees them again.
     const result = await supabase.from("result_sheets").insert({
       election_id: electionId,
       polling_unit_id: pollingUnitId,
@@ -410,7 +306,6 @@ const existing = await supabase
 
     if (result.error) throw result.error;
     sheets++;
-  }
 
   return {
     polling_units: rows.length,
