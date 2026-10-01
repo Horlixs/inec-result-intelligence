@@ -1,3 +1,4 @@
+// Deployment marker: diagnostic must run only after the Edge Function deployment completes.
 const IREV_BASE = "https://dolphin-app-sleqh.ondigitalocean.app/api/v1";
 const ALLOWED_ORIGIN = "https://inec-result-intelligence.vercel.app";
 
