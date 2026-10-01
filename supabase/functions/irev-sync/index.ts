@@ -490,6 +490,47 @@ async function discoverApiWardStructure(
       (api.name ? canonicalLgaByName.get(normalizeGeoName(api.name)) : undefined),
   })).filter((item): item is { api: ApiLga; canonical: Record<string, unknown> } => !!item.canonical?.id);
 
+  // Some current IReV /lga responses expose the LGA only as an internal
+  // numeric/OID identity, while our canonical geography was imported from
+  // INEC's public geography package and therefore has no IReV LGA id yet.
+  // In that case, resolve the LGA through a uniquely named ward within the
+  // known IReV state. This is deliberately conservative: ambiguous ward names
+  // are ignored rather than mapped to the wrong LGA.
+  const fallbackWardByName = new Map<string, Record<string, unknown>>();
+  const fallbackWardAmbiguous = new Set<string>();
+  if (irevStateId >= 1 && irevStateId <= 37) {
+    const stateLookup = await supabaseRest(
+      "states?select=id,code&code=eq." + encodeURIComponent(String(irevStateId).padStart(2, "0")) + "&limit=1",
+      { method: "GET" },
+    );
+    const stateError = supabaseError("fallback state lookup", stateLookup);
+    if (!stateError) {
+      const state = Array.isArray(stateLookup.body)
+        ? (stateLookup.body as Array<Record<string, unknown>>)[0]
+        : null;
+      const stateId = state?.id ? String(state.id) : null;
+      if (stateId) {
+        const wardLookup = await supabaseRest(
+          "wards?select=id,lga_id,name,code,irev_ward_id,irev_ward_oid,lgas!inner(id,state_id,name)&lgas.state_id=eq." +
+          encodeURIComponent(stateId),
+          { method: "GET" },
+        );
+        const wardError = supabaseError("fallback ward lookup", wardLookup);
+        if (!wardError && Array.isArray(wardLookup.body)) {
+          for (const ward of wardLookup.body as Array<Record<string, unknown>>) {
+            const key = normalizeGeoName(ward.name);
+            if (!key) continue;
+            if (fallbackWardByName.has(key)) {
+              fallbackWardAmbiguous.add(key);
+            } else {
+              fallbackWardByName.set(key, ward);
+            }
+          }
+        }
+      }
+    }
+  }
+
   const unresolvedLgas = apiLgas.filter((api) =>
     !resolvedLgas.some((item) => item.api === api)
   ).map((api) => ({ name: api.name, numericId: api.numericId, wardCount: api.wards.length }));
@@ -555,11 +596,32 @@ async function discoverApiWardStructure(
     }
 
     for (const apiWard of item.api.wards) {
-      const canonical =
+      let canonical =
         (apiWard.numericId != null ? byNumericId.get(apiWard.numericId) : undefined) ??
         (apiWard.name ? byName.get(normalizeGeoName(apiWard.name)) : undefined);
 
+      let fallbackLga: Record<string, unknown> | null = null;
+      if (!canonical?.id && apiWard.name) {
+        const key = normalizeGeoName(apiWard.name);
+        const fallback = !fallbackWardAmbiguous.has(key) ? fallbackWardByName.get(key) : undefined;
+        if (fallback?.id) {
+          canonical = fallback;
+          fallbackLga = fallback.lgas && typeof fallback.lgas === "object"
+            ? fallback.lgas as Record<string, unknown>
+            : null;
+        }
+      }
+
       if (!canonical?.id) continue;
+
+      if (fallbackLga?.id && item.api.numericId != null) {
+        lgaUpdates.push({
+          id: fallbackLga.id,
+          state_id: fallbackLga.state_id,
+          name: fallbackLga.name,
+          irev_lga_id: item.api.numericId,
+        });
+      }
 
       matched++;
       if (apiWard.numericId != null && byNumericId.has(apiWard.numericId)) matchedByNumericId++;
