@@ -2,9 +2,6 @@ name: IReV OCR Smoke Process
 
 on:
   workflow_dispatch:
-  push:
-    paths:
-      - ".github/workflows/irev-ocr-smoke.yml"
 
 permissions:
   contents: read
@@ -26,6 +23,4 @@ jobs:
 
           echo "$response"
 
-# Gemini 3.8 smoke checkpoint
 
-# transient Gemini retry checkpoint
