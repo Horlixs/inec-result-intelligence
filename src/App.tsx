@@ -3,6 +3,7 @@ import { AppShell } from "./AppShell";
 import { ElectionDirectory } from "./components/ElectionDirectory";
 import { ElectionProfile } from "./components/ElectionProfile";
 import { RecentElections } from "./components/RecentElections";
+import { AnalyticsWorkspace, CandidatesWorkspace, ResultsWorkspace } from "./components/WorkspacePages";
 
 function Placeholder({ title }: { title: string }) {
   return <div className="rounded-3xl border border-zinc-800/60 bg-zinc-900/35 p-12 text-center"><p className="text-sm font-medium text-zinc-300">{title}</p><p className="mt-2 text-xs text-zinc-600">This workspace is ready for the corresponding evidence module.</p></div>;
@@ -33,6 +34,12 @@ export default function App() {
   let page;
   if (pathname === "/") {
     page = <RecentElections onSelect={(id) => navigate("/elections/" + id + "/results")} />;
+  } else if (pathname === "/results") {
+    page = <ResultsWorkspace onSelectElection={(id) => navigate("/elections/" + id + "/results")} />;
+  } else if (pathname === "/candidates") {
+    page = <CandidatesWorkspace />;
+  } else if (pathname === "/analytics") {
+    page = <AnalyticsWorkspace />;
   } else if (pathname === "/elections") {
     page = <ElectionDirectory />;
   } else if (electionId) {
