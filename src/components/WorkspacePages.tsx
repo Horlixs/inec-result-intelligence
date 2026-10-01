@@ -29,11 +29,11 @@ export function CandidatesWorkspace(){
 
 export function AnalyticsWorkspace(){
  const [rows,setRows]=useState<Coverage[]>([]); const [pipeline,setPipeline]=useState<PipelineStatus|null>(null); const [metrics,setMetrics]=useState<PipelineMetrics|null>(null); const [loading,setLoading]=useState(true); const [error,setError]=useState("");
- useEffect(()=>{if(!supabase)return;let cancelled=false;
+ useEffect(()=>{const client=supabase;if(!client)return;let cancelled=false;
   const load=async()=>{const [r,p,m]=await Promise.all([
-    supabase.from("election_pipeline_coverage").select("*").order("election_date",{ascending:false,nullsFirst:false}),
-    supabase.from("pipeline_worker_status").select("*").eq("id","irev-ocr-drain").maybeSingle(),
-    supabase.from("pipeline_worker_metrics").select("*").maybeSingle(),
+    client.from("election_pipeline_coverage").select("*").order("election_date",{ascending:false,nullsFirst:false}),
+    client.from("pipeline_worker_status").select("*").eq("id","irev-ocr-drain").maybeSingle(),
+    client.from("pipeline_worker_metrics").select("*").maybeSingle(),
   ]);if(cancelled)return;
   const firstError=r.error??p.error??m.error;
   if(firstError)setError(firstError.message);else setError("");
