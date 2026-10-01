@@ -111,7 +111,16 @@ async function finishWard(jobId: string, attempts: number, ok: boolean, error?: 
 async function enqueueSheets() { const { data, error } = await supabase.from("result_sheets").select("id").eq("status", "discovered").order("discovered_at", { ascending: true }).limit(100); if (error) throw error; if (!data?.length) return 0; const result = await supabase.from("result_processing_jobs").upsert(data.map(x => ({ result_sheet_id: x.id, status: "queued" })), { onConflict: "result_sheet_id", ignoreDuplicates: true }); if (result.error) throw result.error; return data.length; }
 async function claimSheet() { const { data, error } = await supabase.rpc("claim_result_processing_job", { p_worker_id: WORKER_ID, p_max_attempts: MAX_ATTEMPTS }); if (error) throw error; return data?.[0] ?? null; }
 async function invokeProcess(sheetId: string) { const response = await fetch(`${SUPABASE_URL.replace(/\/$/, "")}/functions/v1/irev-process`, { method: "POST", headers: { authorization: `Bearer ${SERVICE_KEY}`, apikey: SERVICE_KEY, "content-type": "application/json" }, body: JSON.stringify({ result_sheet_id: sheetId }) }); const body = await response.json().catch(() => ({})); if (!response.ok || body?.ok === false) throw new Error(body?.error ?? `irev-process HTTP ${response.status}`); return body; }
-async function finishSheet(jobId: string, attempts: number, ok: boolean, error?: string) { const update = ok ? { status: "completed", locked_at: null, locked_by: null, last_error: null, completed_at: new Date().toISOString(), updated_at: new Date().toISOString() } : { status: attempts < MAX_ATTEMPTS ? "queued" : "failed", locked_at: null, locked_by: null, last_error: error ?? "Unknown error", available_at: new Date(Date.now() + 15 * 60_000).toISOString(), updated_at: new Date().toISOString() }; const result = await supabase.from("result_processing_jobs").update(update).eq("id", jobId); if (result.error) throw result.error; }
+async function finishSheet(jobId: string, attempts: number, ok: boolean, error?: string, defer = false) {
+  const update = ok
+    ? { status: "completed", locked_at: null, locked_by: null, last_error: null, completed_at: new Date().toISOString(), updated_at: new Date().toISOString() }
+    : defer
+      ? { status: "queued", attempts: Math.max(0, attempts - 1), locked_at: null, locked_by: null, last_error: error ?? "Temporarily deferred", available_at: new Date(Date.now() + 65_000).toISOString(), updated_at: new Date().toISOString() }
+      : { status: attempts < MAX_ATTEMPTS ? "queued" : "failed", locked_at: null, locked_by: null, last_error: error ?? "Unknown processing error", available_at: new Date(Date.now() + 15 * 60_000).toISOString(), updated_at: new Date().toISOString() };
+  const result = await supabase.from("result_processing_jobs").update(update).eq("id", jobId);
+  if (result.error) throw result.error;
+}
+
 async function queueCounts() { const [wards, sheets] = await Promise.all([supabase.from("irev_ward_sync_jobs").select("id", { count: "exact", head: true }).in("status", ["queued", "processing"]), supabase.from("result_processing_jobs").select("id", { count: "exact", head: true }).in("status", ["queued", "processing"])]); if (wards.error) throw wards.error; if (sheets.error) throw sheets.error; return { ward_jobs: wards.count ?? 0, sheet_jobs: sheets.count ?? 0, total: (wards.count ?? 0) + (sheets.count ?? 0) }; }
 Deno.serve(async request => {
   if (request.method === "OPTIONS") return new Response(null, { status: 204, headers: CORS });
@@ -134,8 +143,30 @@ Deno.serve(async request => {
       }
     }
     if (Date.now() - started < DEADLINE_MS) queued = await enqueueSheets();
-    while (sheetProcessed + sheetFailed < MAX_SHEET_JOBS && Date.now() - started < DEADLINE_MS) { const job = await claimSheet(); if (!job) break; try { const result = await invokeProcess(String(job.result_sheet_id)); sheetDiagnostics.push({ job_id: job.job_id, result_sheet_id: job.result_sheet_id, ok: Boolean(result?.ok), status: result?.status ?? null, error: result?.error ?? null }); await finishSheet(job.job_id, Number(job.attempts), Boolean(result?.ok), result?.error); if (result?.ok) sheetProcessed++; else sheetFailed++; } catch (error) { const message = error instanceof Error ? error.message : String(error); sheetDiagnostics.push({ job_id: job.job_id, result_sheet_id: job.result_sheet_id, ok: false, error: message }); sheetFailed++; await finishSheet(job.job_id, Number(job.attempts), false, message); } }
+    let rateLimited = false;
+    while (sheetProcessed + sheetFailed < MAX_SHEET_JOBS && Date.now() - started < DEADLINE_MS) {
+      const job = await claimSheet();
+      if (!job) break;
+      try {
+        const result = await invokeProcess(String(job.result_sheet_id));
+        sheetDiagnostics.push({ job_id: job.job_id, result_sheet_id: job.result_sheet_id, ok: Boolean(result?.ok), status: result?.status ?? null, error: result?.error ?? null });
+        await finishSheet(job.job_id, Number(job.attempts), Boolean(result?.ok), result?.error);
+        if (result?.ok) sheetProcessed++;
+        else sheetFailed++;
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        const isRateLimited = /HTTP 429|RESOURCE_EXHAUSTED|quota exceeded|rate limit/i.test(message);
+        sheetDiagnostics.push({ job_id: job.job_id, result_sheet_id: job.result_sheet_id, ok: false, deferred: isRateLimited, error: message });
+        if (isRateLimited) {
+          await finishSheet(job.job_id, Number(job.attempts), false, message, true);
+          rateLimited = true;
+          break;
+        }
+        sheetFailed++;
+        await finishSheet(job.job_id, Number(job.attempts), false, message);
+      }
+    }
     const remaining = await queueCounts();
-    return json({ ok: true, queued, processed: sheetProcessed, failed: sheetFailed, ward_jobs: { processed: wardProcessed, failed: wardFailed }, ward_diagnostics: wardDiagnostics, sheet_diagnostics: sheetDiagnostics, remaining: remaining.total, remaining_ward_jobs: remaining.ward_jobs, remaining_sheet_jobs: remaining.sheet_jobs, max_ward_jobs: MAX_WARD_JOBS, max_sheet_jobs: MAX_SHEET_JOBS, elapsed_ms: Date.now() - started });
+    return json({ ok: true, queued, processed: sheetProcessed, failed: sheetFailed, ward_jobs: { processed: wardProcessed, failed: wardFailed }, ward_diagnostics: wardDiagnostics, sheet_diagnostics: sheetDiagnostics, remaining: remaining.total, remaining_ward_jobs: remaining.ward_jobs, remaining_sheet_jobs: remaining.sheet_jobs, max_ward_jobs: MAX_WARD_JOBS, max_sheet_jobs: MAX_SHEET_JOBS, rate_limited: rateLimited, elapsed_ms: Date.now() - started });
   } catch (error) { return json({ ok: false, error: error instanceof Error ? error.message : String(error), ward_jobs: { processed: wardProcessed, failed: wardFailed }, processed: sheetProcessed, failed: sheetFailed }, 500); }
 });
