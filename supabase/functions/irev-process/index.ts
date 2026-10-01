@@ -234,10 +234,10 @@ If this is a PDF, inspect the document visually and use the result sheet itself,
         { inline_data: { mime_type: mime, data: base64 } },
       ],
     }],
-    generationConfig: { temperature: 0, responseMimeType: "application/json" },
+    generationConfig: { temperature: 0, responseMimeType: "application/json", maxOutputTokens: 2048 },
   };
 
-  const endpoint = "https://generativelanguage.googleapis.com/v1beta/models/gemini-3.8-flash:generateContent";
+  const endpoint = "https://generativelanguage.googleapis.com/v1beta/models/gemini-3.5-flash-lite:generateContent";
   let response: Response | null = null;
   let lastError = "";
 
@@ -360,7 +360,7 @@ Deno.serve(async request => {
       .insert({
         result_sheet_id: id,
         engine: "google-gemini",
-        engine_version: "gemini-3.8-flash",
+        engine_version: "gemini-3.5-flash-lite",
         raw_output: extracted,
         confidence: Number.isFinite(confidence) ? confidence : null,
         status: extractionStatus,
