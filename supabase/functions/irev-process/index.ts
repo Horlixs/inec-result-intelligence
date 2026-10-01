@@ -25,6 +25,39 @@ function normaliseMime(value: string | null): string {
   return "application/octet-stream";
 }
 
+function inferMimeFromBytes(bytes: Uint8Array, sourceUrl: string): string {
+  if (bytes.length >= 5 &&
+      bytes[0] === 0x25 && bytes[1] === 0x50 && bytes[2] === 0x44 &&
+      bytes[3] === 0x46 && bytes[4] === 0x2d) {
+    return "application/pdf";
+  }
+  if (bytes.length >= 3 &&
+      bytes[0] === 0xff && bytes[1] === 0xd8 && bytes[2] === 0xff) {
+    return "image/jpeg";
+  }
+  if (bytes.length >= 8 &&
+      bytes[0] === 0x89 && bytes[1] === 0x50 && bytes[2] === 0x4e &&
+      bytes[3] === 0x47 && bytes[4] === 0x0d && bytes[5] === 0x0a &&
+      bytes[6] === 0x1a && bytes[7] === 0x0a) {
+    return "image/png";
+  }
+  if (bytes.length >= 12 &&
+      bytes[0] === 0x52 && bytes[1] === 0x49 && bytes[2] === 0x46 && bytes[3] === 0x46 &&
+      bytes[8] === 0x57 && bytes[9] === 0x45 && bytes[10] === 0x42 && bytes[11] === 0x50) {
+    return "image/webp";
+  }
+
+  try {
+    const path = new URL(sourceUrl).pathname.toLowerCase();
+    if (/\.pdf$/.test(path)) return "application/pdf";
+    if (/\.(jpe?g)$/.test(path)) return "image/jpeg";
+    if (/\.png$/.test(path)) return "image/png";
+    if (/\.webp$/.test(path)) return "image/webp";
+  } catch {}
+
+  return "application/octet-stream";
+}
+
 function absoluteSameOrigin(value: string, baseUrl: string): string | null {
   try {
     const url = new URL(value, baseUrl);
@@ -58,18 +91,21 @@ async function fetchEvidence(sourceUrl: string) {
   const first = await fetch(sourceUrl, { headers: { "user-agent": UA } });
   if (!first.ok) throw new Error("Source returned HTTP " + first.status);
 
-  const firstMime = normaliseMime(first.headers.get("content-type"));
+  const declaredMime = normaliseMime(first.headers.get("content-type"));
   const firstBytes = new Uint8Array(await first.arrayBuffer());
   if (!firstBytes.length) throw new Error("Source returned an empty document.");
   if (firstBytes.byteLength > MAX_EVIDENCE_BYTES) {
     throw new Error("Evidence document exceeds the 20 MB processing limit.");
   }
 
+  const inferredMime = inferMimeFromBytes(firstBytes, sourceUrl);
+  const firstMime = isSupportedMime(declaredMime) ? declaredMime : inferredMime;
+
   if (isSupportedMime(firstMime)) {
     return { bytes: firstBytes, mime: firstMime, assetUrl: sourceUrl };
   }
 
-  if (firstMime !== "text/html") {
+  if (declaredMime !== "text/html") {
     throw new Error("Unsupported evidence MIME type: " + firstMime);
   }
 
