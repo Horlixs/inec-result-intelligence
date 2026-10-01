@@ -1,0 +1,63 @@
+name: IReV OCR Drain
+
+on:
+  schedule:
+    - cron: "7,17,27,37,47,57 * * * *"
+  workflow_dispatch:
+
+concurrency:
+  group: irev-ocr-drain
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  drain:
+    runs-on: ubuntu-slim
+    timeout-minutes: 10
+    steps:
+      - name: Drain queued OCR jobs
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_PUBLISHABLE_KEY: ${{ secrets.SUPABASE_PUBLISHABLE_KEY }}
+        run: |
+          set -euo pipefail
+          test -n "$SUPABASE_URL"
+          test -n "$SUPABASE_PUBLISHABLE_KEY"
+
+          total_processed=0
+          total_failed=0
+
+          for attempt in 1 2 3 4 5; do
+            echo "=== OCR drain pass $attempt/5 ==="
+
+            response=$(curl --fail-with-body --silent --show-error               --max-time 135               -X POST "$SUPABASE_URL/functions/v1/irev-batch"               -H "Authorization: Bearer $SUPABASE_PUBLISHABLE_KEY"               -H "apikey: $SUPABASE_PUBLISHABLE_KEY"               -H "Content-Type: application/json"               -d '{}')
+
+            echo "$response"
+
+            summary=$(python3 - "$response" <<'PY'
+          import json,sys
+          d=json.loads(sys.argv[1])
+          if not d.get("ok"):
+              raise SystemExit("Batch returned failure: "+str(d.get("error")))
+          print(f"{d.get('processed',0)} {d.get('failed',0)} {d.get('remaining',0)} {d.get('remaining_sheet_jobs',0)}")
+          PY
+            )
+
+            read processed failed remaining remaining_sheets <<< "$summary"
+            total_processed=$((total_processed + processed))
+            total_failed=$((total_failed + failed))
+
+            echo "PASS=$attempt PROCESSED=$processed FAILED=$failed REMAINING=$remaining SHEET_QUEUE=$remaining_sheets"
+
+            if [ "$remaining_sheets" -eq 0 ]; then
+              echo "OCR queue is empty."
+              break
+            fi
+
+            sleep 2
+          done
+
+          echo "TOTAL_PROCESSED=$total_processed"
+          echo "TOTAL_FAILED=$total_failed"
