@@ -1,6 +1,10 @@
 name: IReV Ward API Diagnostic
 
 on:
+  push:
+    paths:
+      - "supabase/functions/irev-diagnose-ward/**"
+      - ".github/workflows/irev-debug-ward.yml"
   workflow_run:
     workflows:
       - Deploy Supabase Edge Functions
@@ -11,6 +15,7 @@ on:
 jobs:
   inspect:
     if: >-
+      github.event_name == 'push' ||
       github.event_name == 'workflow_dispatch' ||
       github.event.workflow_run.conclusion == 'success'
     runs-on: ubuntu-latest
