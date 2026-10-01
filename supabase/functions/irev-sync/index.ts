@@ -591,7 +591,7 @@ async function discoverApiWardStructure(
     type: "ward_mapping",
     election_id: electionExternalId,
     api_lga_rows: rows.length,
-    api_ward_rows: wards.length,
+    api_ward_rows: apiLgas.reduce((total, lga) => total + lga.wards.length, 0),
     matched_canonical_wards: matched,
     queued_jobs: queued,
   });
