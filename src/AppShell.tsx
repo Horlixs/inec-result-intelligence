@@ -1,4 +1,4 @@
-import { Activity, BarChart3, Database, FileCheck2, LayoutDashboard, Menu, RefreshCw, Settings2, ShieldCheck, Sparkles, X } from "lucide-react";
+import { Activity, BarChart3, Database, FileCheck2, LayoutDashboard, Menu, RefreshCw, Settings2, ShieldCheck, Sparkles, Users, X } from "lucide-react";
 import { useState } from "react";
 import { PipelineRunner } from "./components/PipelineRunner";
 import { SystemValidator } from "./components/SystemValidator";
@@ -6,6 +6,9 @@ import { SystemValidator } from "./components/SystemValidator";
 const navigation = [
   { label: "Overview", to: "/" , icon: LayoutDashboard },
   { label: "Elections", to: "/elections", icon: BarChart3 },
+  { label: "Results", to: "/results", icon: ShieldCheck },
+  { label: "Candidates", to: "/candidates", icon: Users },
+  { label: "Analytics", to: "/analytics", icon: Activity },
   { label: "Result evidence", to: "/evidence", icon: FileCheck2 },
   { label: "Data sources", to: "/sources", icon: Database },
 ];
