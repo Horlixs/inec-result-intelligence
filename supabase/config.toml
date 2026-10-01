@@ -15,3 +15,6 @@ verify_jwt = true
 
 [functions.irev-diagnose-ward]
 verify_jwt = true
+
+[functions.irev-verify-pipeline]
+verify_jwt = true
