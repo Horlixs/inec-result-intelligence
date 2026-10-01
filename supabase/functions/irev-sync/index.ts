@@ -358,35 +358,134 @@ async function discoverApiWardStructure(
   }
   if (!rows.length) return 0;
 
-  const wards: Array<{ oid: string; numericId: number | null }> = [];
-  const seen = new Set<string>();
+  const normalizeGeoName = (value: unknown) => String(value ?? "")
+    .normalize("NFKD")
+    .replace(/[\\u0300-\\u036f]/g, "")
+    .toUpperCase()
+    .replace(/\\b(LGA|LOCAL GOVERNMENT AREA|WARD|REGISTRATION AREA|RA)\\b/g, "")
+    .replace(/[^A-Z0-9]+/g, " ")
+    .trim()
+    .replace(/\\s+/g, " ");
+  const numericIdentity = (value: unknown): number | null => {
+    const parsed = Number(value);
+    return Number.isInteger(parsed) && parsed > 0 ? parsed : null;
+  };
 
-  for (const lgaRaw of rows) {
-    const rawWards = Array.isArray(lgaRaw.wards) ? lgaRaw.wards : [];
-    for (const value of rawWards) {
-      if (!isRecord(value)) continue;
-      const oid = objectId(value._id);
-      if (!oid || seen.has(oid)) continue;
-      seen.add(oid);
+  type ApiLga = {
+    numericId: number | null;
+    oid: string | null;
+    name: string | null;
+    wards: Array<{ numericId: number | null; oid: string | null; name: string | null }>;
+  };
 
-      const numericId = Number(value.ward_id ?? value.id);
-      wards.push({
-        oid,
-        numericId: Number.isFinite(numericId) ? numericId : null,
-      });
+  const apiLgas: ApiLga[] = [];
+  const lgaSeen = new Set<string>();
+  for (const row of rows) {
+    const lgaObject = row.lga && typeof row.lga === "object" ? row.lga as Record<string, unknown> : null;
+    const numericId = numericIdentity(row.lga_id ?? row.id ?? lgaObject?.lga_id ?? lgaObject?.id);
+    const oidCandidate = String(row._id ?? row.oid ?? lgaObject?._id ?? lgaObject?.oid ?? "").trim();
+    const oid = /^[a-f0-9]{24}$/i.test(oidCandidate) ? oidCandidate : null;
+    const name = String(row.name ?? row.lga_name ?? lgaObject?.name ?? lgaObject?.lga_name ?? "").trim() || null;
+    const key = oid ?? (String(numericId ?? "null") + ":" + normalizeGeoName(name));
+    if (!key || lgaSeen.has(key)) continue;
+    lgaSeen.add(key);
+
+    const wards = Array.isArray(row.wards)
+      ? row.wards.filter(isRecord).map((ward) => {
+          const wardNumeric = numericIdentity(ward.ward_id ?? ward.id);
+          const wardOidCandidate = String(ward._id ?? ward.oid ?? "").trim();
+          return {
+            numericId: wardNumeric,
+            oid: /^[a-f0-9]{24}$/i.test(wardOidCandidate) ? wardOidCandidate : null,
+            name: String(ward.name ?? ward.ward_name ?? "").trim() || null,
+          };
+        }).filter((ward) => ward.oid || ward.numericId != null || ward.name)
+      : [];
+
+    apiLgas.push({ numericId, oid, name, wards });
+  }
+
+  const apiLgaIds = [...new Set(apiLgas.map((lga) => lga.numericId).filter((id): id is number => id != null))];
+  const canonicalLgaByIrevId = new Map<number, Record<string, unknown>>();
+  const canonicalLgaByName = new Map<string, Record<string, unknown>>();
+
+  if (apiLgaIds.length) {
+    const lookup = await supabaseRest(
+      "lgas?select=id,state_id,name,irev_lga_id&irev_lga_id=in.(" + apiLgaIds.join(",") + ")",
+      { method: "GET" },
+    );
+    const lookupError = supabaseError("canonical LGA identity lookup", lookup);
+    if (lookupError) throw lookupError;
+    for (const row of Array.isArray(lookup.body) ? lookup.body as Array<Record<string, unknown>> : []) {
+      const id = numericIdentity(row.irev_lga_id);
+      if (id != null) canonicalLgaByIrevId.set(id, row);
+      const name = normalizeGeoName(row.name);
+      if (name) canonicalLgaByName.set(name, row);
     }
   }
 
-  if (!wards.length) {
-    diagnostics.push({
-      type: "ward_mapping",
-      election_id: electionExternalId,
-      api_lga_rows: rows.length,
-      api_ward_rows: 0,
-      matched_canonical_wards: 0,
-      queued_jobs: 0,
-    });
-    return 0;
+  const apiLgaNames = [...new Set(apiLgas.map((lga) => normalizeGeoName(lga.name)).filter(Boolean))];
+  const missingNames = apiLgaNames.filter((name) => !canonicalLgaByName.has(name));
+  if (missingNames.length) {
+    const lookup = await supabaseRest(
+      "lgas?select=id,state_id,name,irev_lga_id&name=in.(" + missingNames.map(encodeURIComponent).join(",") + ")",
+      { method: "GET" },
+    );
+    const lookupError = supabaseError("canonical LGA name lookup", lookup);
+    if (lookupError) throw lookupError;
+    for (const row of Array.isArray(lookup.body) ? lookup.body as Array<Record<string, unknown>> : []) {
+      const name = normalizeGeoName(row.name);
+      if (name && !canonicalLgaByName.has(name)) canonicalLgaByName.set(name, row);
+    }
+  }
+
+  const resolvedLgas = apiLgas.map((api) => ({
+    api,
+    canonical: (api.numericId != null ? canonicalLgaByIrevId.get(api.numericId) : undefined) ??
+      (api.name ? canonicalLgaByName.get(normalizeGeoName(api.name)) : undefined),
+  })).filter((item): item is { api: ApiLga; canonical: Record<string, unknown> } => !!item.canonical?.id);
+
+  const unresolvedLgas = apiLgas.filter((api) =>
+    !resolvedLgas.some((item) => item.api === api)
+  ).map((api) => ({ name: api.name, numericId: api.numericId, wardCount: api.wards.length }));
+
+  const lgaUpdates = resolvedLgas
+    .filter(({ api }) => api.numericId != null)
+    .map(({ api, canonical }) => ({
+      id: canonical.id,
+      state_id: canonical.state_id,
+      name: canonical.name,
+      irev_lga_id: api.numericId,
+    }));
+
+  if (lgaUpdates.length) {
+    const update = await supabaseRest(
+      "lgas?on_conflict=id",
+      {
+        method: "POST",
+        headers: { Prefer: "resolution=merge-duplicates,return=minimal" },
+        body: JSON.stringify(lgaUpdates),
+      },
+    );
+    const updateError = supabaseError("canonical LGA identity upsert", update);
+    if (updateError) throw updateError;
+  }
+
+  const canonicalLgaIds = [...new Set(resolvedLgas.map(({ canonical }) => String(canonical.id)))];
+  const canonicalWards = new Map<string, Array<Record<string, unknown>>>();
+  if (canonicalLgaIds.length) {
+    const lookup = await supabaseRest(
+      "wards?select=id,lga_id,name,irev_ward_id,irev_ward_oid&lga_id=in.(" + canonicalLgaIds.join(",") + ")",
+      { method: "GET" },
+    );
+    const lookupError = supabaseError("canonical ward geography lookup", lookup);
+    if (lookupError) throw lookupError;
+    for (const row of Array.isArray(lookup.body) ? lookup.body as Array<Record<string, unknown>> : []) {
+      const lgaId = String(row.lga_id);
+      const current = canonicalWards.get(lgaId) ?? [];
+      current.push(row);
+      canonicalWards.set(lgaId, current);
+    }
   }
 
   let matched = 0;
