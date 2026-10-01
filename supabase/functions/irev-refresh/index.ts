@@ -63,10 +63,7 @@ function irevRows(payload: unknown): Array<Record<string, unknown>> {
   return [];
 }
 
-function getDocumentUrl(
-  row: Record<string, unknown>,
-  electionExternalId: string,
-): string | null {
+function getDocumentUrl(row: Record<string, unknown>): string | null {
   const nestedPu = row.polling_unit && typeof row.polling_unit === "object"
     ? row.polling_unit as Record<string, unknown>
     : null;
@@ -99,35 +96,17 @@ function getDocumentUrl(
     row.file_url, row.document_url, row.url, row.href,
     nestedPu?.document, nestedPu?.result, nestedPu?.result_sheet,
     nestedPu?.file, nestedPu?.file_url, nestedPu?.document_url, nestedPu?.url,
+    row.old_documents, nestedPu?.old_documents,
   ]) {
-    const resolved = inspect(value);
-    if (resolved) return resolved;
-  }
-
-  for (const value of [row.old_documents, nestedPu?.old_documents]) {
-    if (!Array.isArray(value)) continue;
-    for (const item of [...value].reverse()) {
-      const resolved = inspect(item);
+    if (Array.isArray(value)) {
+      for (const item of [...value].reverse()) {
+        const resolved = inspect(item);
+        if (resolved) return resolved;
+      }
+    } else {
+      const resolved = inspect(value);
       if (resolved) return resolved;
     }
-  }
-
-  // In the documented IReV response, the top-level _id is the result
-  // wrapper; the polling-unit document route uses polling_unit._id.
-  const puId = String(
-    nestedPu?._id ??
-    row.polling_unit_oid ??
-    row.external_id ??
-    row._id ??
-    "",
-  ).trim();
-
-  if (/^[a-f0-9]{24}$/i.test(electionExternalId) && /^[a-f0-9]{24}$/i.test(puId)) {
-    return "https://inecelectionresults.ng/elections/" +
-      encodeURIComponent(electionExternalId) +
-      "/pu/" +
-      encodeURIComponent(puId) +
-      "/document";
   }
 
   return null;
@@ -215,21 +194,103 @@ async function processWardJob(job: Record<string, unknown>) {
       if (error) throw error;
     }
 
-    const url = getDocumentUrl(row, irevElectionId);
-
-    // A polling-unit record without a document is a valid IReV state, not an
-    // OCR failure. Do not manufacture a /document SPA URL: that URL is only a
-    // client route and is not evidence. If a fallback row was created by an
-    // older sync, retire it so it cannot keep generating failed OCR jobs.
-    const fallbackUrl = puExternalId
-      ? "https://inecelectionresults.ng/elections/" +
-        encodeURIComponent(irevElectionId) +
-        "/pu/" +
-        encodeURIComponent(puExternalId) +
-        "/document"
-      : null;
+    const url = getDocumentUrl(row);
 
     const existing = await supabase
+      .from("result_sheets")
+      .select("id,status,source_url")
+      .eq("election_id", electionId)
+      .eq("polling_unit_id", pollingUnitId)
+      .order("discovered_at", { ascending: false })
+      .limit(20);
+
+    if (existing.error) throw existing.error;
+
+    if (!url) {
+      const staleIds = (existing.data ?? [])
+        .filter(sheet => sheet.source_url?.includes("/pu/") && sheet.source_url?.endsWith("/document"))
+        .map(sheet => sheet.id);
+
+      if (staleIds.length) {
+        const { error } = await supabase
+          .from("result_sheets")
+          .update({
+            status: "skipped",
+            last_error: "IReV polling-unit record has no document asset",
+            evidence_status: "remote_only",
+            updated_at: new Date().toISOString(),
+          })
+          .in("id", staleIds);
+        if (error) throw error;
+
+        const { error: jobError } = await supabase
+          .from("result_processing_jobs")
+          .delete()
+          .in("result_sheet_id", staleIds);
+        if (jobError) throw jobError;
+      }
+
+      continue;
+    }
+
+    rowsWithDocuments++;
+
+    const document =
+      row.document && typeof row.document === "object"
+        ? row.document as Record<string, unknown>
+        : nestedPu?.document && typeof nestedPu.document === "object"
+          ? nestedPu.document as Record<string, unknown>
+          : {};
+
+    const sourceExternalId = String(
+      document._id ??
+      row.document_id ??
+      nestedPu?.document_id ??
+      puExternalId ??
+      url,
+    );
+
+    const staleSheet = (existing.data ?? []).find(sheet =>
+      sheet.source_url?.includes("/pu/") && sheet.source_url?.endsWith("/document")
+    );
+
+    if (staleSheet) {
+      const { error: updateError } = await supabase
+        .from("result_sheets")
+        .update({
+          source_url: url,
+          source_external_id: sourceExternalId,
+          status: "discovered",
+          evidence_status: "remote_only",
+          storage_policy: "ephemeral",
+          discovered_at: new Date().toISOString(),
+          last_error: null,
+          processing_attempts: 0,
+          processed_at: null,
+        })
+        .eq("id", staleSheet.id);
+      if (updateError) throw updateError;
+
+      const { error: resetJobError } = await supabase
+        .from("result_processing_jobs")
+        .delete()
+        .eq("result_sheet_id", staleSheet.id);
+      if (resetJobError) throw resetJobError;
+
+      const { error: queueJobError } = await supabase
+        .from("result_processing_jobs")
+        .insert({
+          result_sheet_id: staleSheet.id,
+          status: "queued",
+          attempts: 0,
+          available_at: new Date().toISOString(),
+        });
+      if (queueJobError) throw queueJobError;
+
+      sheets++;
+      continue;
+    }
+const existing = await supabase
       .from("result_sheets")
       .select("id,status,source_url")
       .eq("election_id", electionId)
