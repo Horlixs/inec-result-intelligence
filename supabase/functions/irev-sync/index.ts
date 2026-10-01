@@ -487,11 +487,9 @@ async function discoverApiWardStructure(
     }
   }
 
-  let resolvedLgas = apiLgas.map((api) => ({
-    api,
-    canonical: (api.numericId != null ? canonicalLgaByIrevId.get(api.numericId) : undefined) ??
-      (api.name ? canonicalLgaByName.get(normalizeGeoName(api.name)) : undefined),
-  })).filter((item): item is { api: ApiLga; canonical: Record<string, unknown> } => !!item.canonical?.id);
+  let resolvedLgas: Array<{ api: ApiLga; canonical: Record<string, unknown> }> = [];
+
+
 
   // Some current IReV /lga responses expose the LGA only as an internal
   // numeric/OID identity, while our canonical geography was imported from
@@ -567,13 +565,13 @@ async function discoverApiWardStructure(
     }
   }
 
-  if (fallbackLgaByCode.size) {
-    resolvedLgas = resolvedLgas.map(item => {
-      if (item.canonical?.id || !item.api.code) return item;
-      const canonical = fallbackLgaByCode.get(String(item.api.code).padStart(2, "0"));
-      return canonical?.id ? { api: item.api, canonical } : item;
-    }).filter((item): item is { api: ApiLga; canonical: Record<string, unknown> } => !!item.canonical?.id);
-  }
+  resolvedLgas = apiLgas.map((api) => {
+    const canonical =
+      (api.numericId != null ? canonicalLgaByIrevId.get(api.numericId) : undefined) ??
+      (api.name ? canonicalLgaByName.get(normalizeGeoName(api.name)) : undefined) ??
+      (api.code ? fallbackLgaByCode.get(String(api.code).padStart(2, "0")) : undefined);
+    return canonical?.id ? { api, canonical } : null;
+  }).filter((item): item is { api: ApiLga; canonical: Record<string, unknown> } => !!item);
 
   const unresolvedLgas = apiLgas.filter((api) =>
     !resolvedLgas.some((item) => item.api === api)
