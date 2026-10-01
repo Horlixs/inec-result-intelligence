@@ -490,57 +490,55 @@ async function discoverApiWardStructure(
 
   let matched = 0;
   let queued = 0;
+  let repairedOids = 0;
+  let matchedByNumericId = 0;
+  let matchedByName = 0;
+  const wardUpdates: Array<Record<string, unknown>> = [];
+  const jobs: Array<Record<string, unknown>> = [];
 
-  // PostgREST supports the IN filter. Keep batches small enough for URL and
-  // response-size limits while avoiding hundreds of individual requests.
-  for (let offset = 0; offset < wards.length; offset += 100) {
-    const batch = wards.slice(offset, offset + 100);
-    const oidList = batch.map((ward) => ward.oid).join(",");
+  for (const item of resolvedLgas) {
+    const lgaId = String(item.canonical.id);
+    const wardsForLga = canonicalWards.get(lgaId) ?? [];
+    const byNumericId = new Map<number, Record<string, unknown>>();
+    const byName = new Map<string, Record<string, unknown>>();
 
-    const lookup = await supabaseRest(
-      "wards?select=id,irev_ward_oid&irev_ward_oid=in.(" + oidList + ")",
-      { method: "GET" },
-    );
-    const lookupError = supabaseError("canonical ward lookup", lookup);
-    if (lookupError) throw lookupError;
+    for (const ward of wardsForLga) {
+      const numeric = numericIdentity(ward.irev_ward_id);
+      if (numeric != null) byNumericId.set(numeric, ward);
+      const name = normalizeGeoName(ward.name);
+      if (name) byName.set(name, ward);
+    }
 
-    const canonicalRows = Array.isArray(lookup.body)
-      ? lookup.body as Array<Record<string, unknown>>
-      : [];
+    for (const apiWard of item.api.wards) {
+      const canonical =
+        (apiWard.numericId != null ? byNumericId.get(apiWard.numericId) : undefined) ??
+        (apiWard.name ? byName.get(normalizeGeoName(apiWard.name)) : undefined);
 
-    matched += canonicalRows.length;
-    if (!canonicalRows.length) continue;
+      if (!canonical?.id) continue;
 
-    const jobs = canonicalRows
-      .map((row) => {
-        const wardId = row.id;
-        const wardOid = String(row.irev_ward_oid ?? "");
-        if (!wardId || !objectId(wardOid)) return null;
+      matched++;
+      if (apiWard.numericId != null && byNumericId.has(apiWard.numericId)) matchedByNumericId++;
+      else matchedByName++;
 
-        const sourceWard = batch.find((ward) => ward.oid.toLowerCase() === wardOid.toLowerCase());
-        return {
-          election_id: electionId,
-          ward_id: wardId,
-          status: "queued",
-          available_at: new Date().toISOString(),
-          ...(sourceWard?.numericId != null ? { irev_ward_id: sourceWard.numericId } : {}),
-        };
-      })
-      .filter(Boolean);
+      const previousOid = objectId(canonical.irev_ward_oid);
+      if (apiWard.oid && previousOid?.toLowerCase() !== apiWard.oid.toLowerCase()) repairedOids++;
 
-    if (!jobs.length) continue;
+      wardUpdates.push({
+        id: canonical.id,
+        lga_id: canonical.lga_id,
+        name: canonical.name,
+        ...(apiWard.numericId != null ? { irev_ward_id: apiWard.numericId } : {}),
+        ...(apiWard.oid ? { irev_ward_oid: apiWard.oid } : {}),
+      });
 
-    const job = await supabaseRest(
-      "irev_ward_sync_jobs?on_conflict=election_id,ward_id",
-      {
-        method: "POST",
-        headers: { Prefer: "resolution=merge-duplicates,return=minimal" },
-        body: JSON.stringify(jobs),
-      },
-    );
-    const jobError = supabaseError("ward job batch upsert", job);
-    if (jobError) throw jobError;
-    if (job.response.ok) queued += jobs.length;
+      jobs.push({
+        election_id: electionId,
+        ward_id: canonical.id,
+        status: "queued",
+        available_at: new Date().toISOString(),
+        ...(apiWard.numericId != null ? { irev_ward_id: apiWard.numericId } : {}),
+      });
+    }
   }
 
   diagnostics.push({
