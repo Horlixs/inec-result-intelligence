@@ -498,38 +498,67 @@ async function discoverApiWardStructure(
   // are ignored rather than mapped to the wrong LGA.
   const fallbackWardByName = new Map<string, Record<string, unknown>>();
   const fallbackWardAmbiguous = new Set<string>();
+  let fallbackStateResolved = false;
+  let fallbackWardRows = 0;
+
   if (irevStateId >= 1 && irevStateId <= 37) {
     const stateLookup = await supabaseRest(
-      "states?select=id,code&code=eq." + encodeURIComponent(String(irevStateId).padStart(2, "0")) + "&limit=1",
+      "states?select=id,code&code=eq." +
+      encodeURIComponent(String(irevStateId).padStart(2, "0")) +
+      "&limit=1",
       { method: "GET" },
     );
     const stateError = supabaseError("fallback state lookup", stateLookup);
-    if (!stateError) {
-      const state = Array.isArray(stateLookup.body)
-        ? (stateLookup.body as Array<Record<string, unknown>>)[0]
-        : null;
+    if (!stateError && Array.isArray(stateLookup.body)) {
+      const state = (stateLookup.body as Array<Record<string, unknown>>)[0];
       const stateId = state?.id ? String(state.id) : null;
       if (stateId) {
-        const wardLookup = await supabaseRest(
-          "wards?select=id,lga_id,name,code,irev_ward_id,irev_ward_oid,lgas!inner(id,state_id,name)&lgas.state_id=eq." +
+        const lgaLookup = await supabaseRest(
+          "lgas?select=id,state_id,name,code,irev_lga_id&state_id=eq." +
           encodeURIComponent(stateId),
           { method: "GET" },
         );
-        const wardError = supabaseError("fallback ward lookup", wardLookup);
-        if (!wardError && Array.isArray(wardLookup.body)) {
-          for (const ward of wardLookup.body as Array<Record<string, unknown>>) {
-            const key = normalizeGeoName(ward.name);
-            if (!key) continue;
-            if (fallbackWardByName.has(key)) {
-              fallbackWardAmbiguous.add(key);
-            } else {
-              fallbackWardByName.set(key, ward);
+        const lgaError = supabaseError("fallback LGA lookup", lgaLookup);
+        if (!lgaError && Array.isArray(lgaLookup.body)) {
+          const lgaIds = (lgaLookup.body as Array<Record<string, unknown>>)
+            .map(row => String(row.id ?? ""))
+            .filter(Boolean);
+
+          if (lgaIds.length) {
+            const wardLookup = await supabaseRest(
+              "wards?select=id,lga_id,name,code,irev_ward_id,irev_ward_oid&lga_id=in.(" +
+              lgaIds.map(encodeURIComponent).join(",") + ")",
+              { method: "GET" },
+            );
+            const wardError = supabaseError("fallback ward lookup", wardLookup);
+            if (!wardError && Array.isArray(wardLookup.body)) {
+              fallbackStateResolved = true;
+              fallbackWardRows = wardLookup.body.length;
+              const lgaById = new Map(
+                (lgaLookup.body as Array<Record<string, unknown>>)
+                  .map(row => [String(row.id), row]),
+              );
+
+              for (const ward of wardLookup.body as Array<Record<string, unknown>>) {
+                const key = normalizeGeoName(ward.name);
+                if (!key) continue;
+                const enriched = {
+                  ...ward,
+                  lgas: lgaById.get(String(ward.lga_id)) ?? null,
+                };
+                if (fallbackWardByName.has(key)) {
+                  fallbackWardAmbiguous.add(key);
+                } else {
+                  fallbackWardByName.set(key, enriched);
+                }
+              }
             }
           }
         }
       }
     }
   }
+
 
   const unresolvedLgas = apiLgas.filter((api) =>
     !resolvedLgas.some((item) => item.api === api)
@@ -700,7 +729,11 @@ async function discoverApiWardStructure(
     api_lga_rows: rows.length,
     api_ward_rows: apiLgas.reduce((total, lga) => total + lga.wards.length, 0),
     matched_canonical_wards: matched,
+    matched_by_numeric_id: matchedByNumericId,
+    matched_by_name: matchedByName,
     queued_jobs: queued,
+    fallback_state_resolved: fallbackStateResolved,
+    fallback_ward_rows: fallbackWardRows,
   });
 
   return queued;
