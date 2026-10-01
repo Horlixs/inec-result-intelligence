@@ -29,16 +29,66 @@ function documentUrl(row: Record<string, unknown>, electionId: string) {
   if (objectId(electionId) && objectId(puId)) return `https://inecelectionresults.ng/elections/${encodeURIComponent(electionId)}/pu/${encodeURIComponent(puId)}/document`;
   return null;
 }
-async function fetchWard(electionId: string, wardOid: string) {
+async function irevGet(electionId: string, path: string) {
   const controller = new AbortController(); const timer = setTimeout(() => controller.abort(), 12_000);
-  try { const response = await fetch(`${IREV_BASE}/elections/${encodeURIComponent(electionId)}/pus?ward=${encodeURIComponent(wardOid)}`, { headers: { "user-agent": "INEC-Result-Intelligence/1.0 source-collector", accept: "application/json, text/plain, */*", origin: "https://inecelectionresults.ng", referer: "https://inecelectionresults.ng/", "x-api-key": IREV_KEY, "x-api-rt": String(Date.now()) }, signal: controller.signal }); if (!response.ok) throw new Error(`IReV ward HTTP ${response.status}`); const text = await response.text(); return text ? JSON.parse(text) : null; } finally { clearTimeout(timer); }
+  try {
+    const response = await fetch(IREV_BASE + "/elections/" + encodeURIComponent(electionId) + path, {
+      headers: { "user-agent": "INEC-Result-Intelligence/1.0 source-collector", accept: "application/json, text/plain, */*", origin: "https://inecelectionresults.ng", referer: "https://inecelectionresults.ng/", "x-api-key": IREV_KEY, "x-api-rt": String(Date.now()) },
+      signal: controller.signal,
+    });
+    if (!response.ok) throw new Error("IReV " + path + " HTTP " + response.status);
+    const text = await response.text();
+    return text ? JSON.parse(text) : null;
+  } finally { clearTimeout(timer); }
+}
+
+async function fetchWard(electionId: string, wardOid: string) {
+  return irevGet(electionId, "/pus?ward=" + encodeURIComponent(wardOid));
+}
+
+function apiArray(payload: unknown, keys: string[]): Array<Record<string, unknown>> {
+  if (Array.isArray(payload)) return payload.filter(x => !!x && typeof x === "object") as Array<Record<string, unknown>>;
+  if (!payload || typeof payload !== "object") return [];
+  const obj = payload as Record<string, unknown>;
+  for (const key of keys) { const value = obj[key]; if (Array.isArray(value)) return value.filter(x => !!x && typeof x === "object") as Array<Record<string, unknown>>; }
+  return [];
+}
+
+function apiObjectId(value: unknown): string | null { const id = String(value ?? "").trim(); return /^[a-f0-9]{24}$/i.test(id) ? id : null; }
+
+function findWardInElectionLga(payload: unknown, wardOid: string, wardNumericId: number | null) {
+  const lgas = apiArray(payload, ["data", "lgas", "election_lgas", "results", "items"]);
+  for (const lga of lgas) {
+    const wards = Array.isArray(lga.wards) ? lga.wards : [];
+    for (const raw of wards) {
+      if (!raw || typeof raw !== "object") continue;
+      const ward = raw as Record<string, unknown>;
+      const oid = apiObjectId(ward._id);
+      const numeric = Number(ward.ward_id ?? ward.id);
+      if ((oid && oid.toLowerCase() === wardOid.toLowerCase()) || (wardNumericId != null && Number.isInteger(numeric) && numeric === wardNumericId)) return { oid, numericId: Number.isInteger(numeric) ? numeric : null, name: String(ward.name ?? ward.ward_name ?? "").trim() || null, lgaOid: apiObjectId(lga._id) };
+    }
+  }
+  return null;
 }
 async function claimWard() { const { data, error } = await supabase.rpc("claim_irev_ward_sync_job", { p_worker_id: WORKER_ID, p_max_attempts: MAX_ATTEMPTS }); if (error) throw error; return data?.[0] ?? null; }
 async function processWard(job: Record<string, unknown>) {
   const electionId = String(job.election_id); const wardId = String(job.ward_id);
   const election = await supabase.from("elections").select("external_id").eq("id", electionId).single(); if (election.error || !election.data?.external_id) throw new Error("Election IReV identity unavailable");
   const ward = await supabase.from("wards").select("irev_ward_oid").eq("id", wardId).single(); if (ward.error || !ward.data?.irev_ward_oid) throw new Error("Ward IReV identity unavailable");
-  const irevElectionId = String(election.data.external_id).replace(/^irev:/, ""); const payload = await fetchWard(irevElectionId, String(ward.data.irev_ward_oid)); const puRows = rows(payload); let sheets = 0;
+  const irevElectionId = String(election.data.external_id).replace(/^irev:/, "");
+  const wardOid = String(ward.data.irev_ward_oid);
+  const wardNumericId = Number(ward.data.irev_ward_id);
+  let resolvedWard = { oid: apiObjectId(wardOid), numericId: Number.isInteger(wardNumericId) ? wardNumericId : null, name: null as string | null, lgaOid: null as string | null };
+  let hierarchySource: "canonical" | "election_lga_fallback" = "canonical";
+  let payload = await fetchWard(irevElectionId, wardOid);
+  let puRows = rows(payload);
+  if (!puRows.length) {
+    const hierarchy = await irevGet(irevElectionId, "/lga");
+    const matched = findWardInElectionLga(hierarchy, wardOid, resolvedWard.numericId);
+    if (matched?.oid && matched.oid.toLowerCase() !== wardOid.toLowerCase()) { resolvedWard = matched; hierarchySource = "election_lga_fallback"; payload = await fetchWard(irevElectionId, matched.oid); puRows = rows(payload); }
+  }
+  const diagnostics = { requested_ward_oid: wardOid, requested_ward_numeric_id: resolvedWard.numericId, resolved_ward_oid: resolvedWard.oid, resolved_ward_name: resolvedWard.name, resolved_lga_oid: resolvedWard.lgaOid, hierarchy_source: hierarchySource, polling_units: puRows.length, payload_success: payload && typeof payload === "object" ? (payload as Record<string, unknown>).success ?? null : null };
+  let sheets = 0;
   for (const row of puRows) {
     const pu = row.polling_unit && typeof row.polling_unit === "object" ? row.polling_unit as Record<string, unknown> : null;
     const externalId = String(pu?._id ?? row.polling_unit_oid ?? row.external_id ?? row._id ?? "").trim() || null;
