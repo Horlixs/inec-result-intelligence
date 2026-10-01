@@ -306,6 +306,7 @@ async function processWardJob(job: Record<string, unknown>) {
 
     if (result.error) throw result.error;
     sheets++;
+  }
 
   return {
     polling_units: rows.length,
