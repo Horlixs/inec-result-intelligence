@@ -382,7 +382,7 @@ async function discoverApiWardStructure(
   irevStateId: number,
   diagnostics: Array<Record<string, unknown>>,
 ): Promise<number> {
-  // The current election hierarchy is authoritative for ward identity; stored OIDs are refreshed before queueing.
+  // The current election hierarchy is authoritative for ward identity; // deploy checkpoint stored OIDs are refreshed before queueing.
   // polling-unit documents. Match those OIDs against our canonical geography
   // in batches instead of doing one database request per ward. The previous
   // per-ward lookup/upsert loop was the main source of the 150s idle timeout.
