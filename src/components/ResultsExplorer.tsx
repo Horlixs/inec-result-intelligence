@@ -108,7 +108,7 @@ export function ResultsExplorer({
         setIdentity((identityRes.data ?? []) as Enriched[]);
 
         if (pollingUnitId) {
-          const result = await supabase!.from("polling_unit_candidate_results").select("label,votes,polling_units_with_entry,verified_result_sheets").eq("election_id", electionId).eq("polling_unit_id", pollingUnitId).order("votes", { ascending:false, nullsFirst:false }).order("label");
+          const result = await supabase!.from("polling_unit_candidate_results").select("label,candidate_id,candidate_name,party_id,party_abbreviation,party_name,votes,polling_units_with_entry,verified_result_sheets").eq("election_id", electionId).eq("polling_unit_id", pollingUnitId).order("votes", { ascending:false, nullsFirst:false }).order("label");
           if (result.error) throw result.error;
           setRows((result.data ?? []).map((r:any) => ({label:r.label,total_votes:r.votes,polling_units_with_entry:1,verified_result_sheets:1})));
         } else if (stateId) {
