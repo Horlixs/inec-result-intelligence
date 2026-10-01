@@ -70,6 +70,38 @@ function absoluteSameOrigin(value: string, baseUrl: string): string | null {
   }
 }
 
+async function fetchWithRetry(
+  input: RequestInfo | URL,
+  init: RequestInit = {},
+  attempts = 4,
+  timeoutMs = 20000,
+): Promise<Response> {
+  let lastError: unknown = null;
+  for (let attempt = 1; attempt <= attempts; attempt++) {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), timeoutMs);
+    try {
+      const response = await fetch(input, { ...init, signal: controller.signal });
+      if (response.ok || ![408, 429, 500, 502, 503, 504].includes(response.status) || attempt === attempts) {
+        return response;
+      }
+      lastError = new Error("HTTP " + response.status);
+      const retryAfter = Number(response.headers.get("retry-after") ?? "");
+      const delay = Number.isFinite(retryAfter) && retryAfter > 0
+        ? Math.min(retryAfter * 1000, 15000)
+        : Math.min(attempt * 2000, 8000);
+      await new Promise(resolve => setTimeout(resolve, delay));
+    } catch (error) {
+      lastError = error;
+      if (attempt === attempts) throw error;
+      await new Promise(resolve => setTimeout(resolve, Math.min(attempt * 2000, 8000)));
+    } finally {
+      clearTimeout(timer);
+    }
+  }
+  throw lastError instanceof Error ? lastError : new Error("Request failed");
+}
+
 function extractDocumentAssets(html: string, pageUrl: string): string[] {
   const assets = new Set<string>();
 
@@ -184,7 +216,7 @@ async function resolveCanonicalIrevSource(
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), 20_000);
   try {
-    const response = await fetch(
+    const response = await fetchWithRetry(
       IREV_API_BASE + "/elections/" + encodeURIComponent(electionExternalId) +
       "/pus?ward=" + encodeURIComponent(String(ward.irev_ward_oid)),
       {
@@ -236,7 +268,7 @@ async function resolveCanonicalIrevSource(
 }
 
 async function fetchEvidence(sourceUrl: string) {
-  const first = await fetch(sourceUrl, { headers: { "user-agent": UA } });
+  const first = await fetchWithRetry(sourceUrl, { headers: { "user-agent": UA, accept: "application/pdf,image/jpeg,image/png,image/webp,text/html,*/*" } });
   if (!first.ok) throw new Error("Source returned HTTP " + first.status);
 
   const declaredMime = normaliseMime(first.headers.get("content-type"));
@@ -267,7 +299,7 @@ async function fetchEvidence(sourceUrl: string) {
 
   for (const assetUrl of ranked) {
     try {
-      const response = await fetch(assetUrl, { headers: { "user-agent": UA, referer: sourceUrl } });
+      const response = await fetchWithRetry(assetUrl, { headers: { "user-agent": UA, referer: sourceUrl } }, 3, 15000);
       if (!response.ok) continue;
 
       const mime = normaliseMime(response.headers.get("content-type"));
