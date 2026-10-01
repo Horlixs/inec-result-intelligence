@@ -7,8 +7,7 @@ const API_BASES = [
   // DigitalOcean hosts the current IReV API used by the public frontend.
   "https://dolphin-app-sleqh.ondigitalocean.app/api/v1",
 ];
-const IREV_KEY = Deno.env.get("IREV_KEY")?.trim();
-if (!IREV_KEY) throw new Error("Missing IREV_KEY secret");
+const IREV_KEY = Deno.env.get("IREV_KEY")?.trim() || null;
 const KNOWN_ELECTION_TYPE_IDS = [
   "5f129a04df41d910dcdc1d50", "5f129a04df41d910dcdc1d51", "5f129a04df41d910dcdc1d52",
   "5f129a04df41d910dcdc1d53", "5f129a04df41d910dcdc1d54", "5f129a04df41d910dcdc1d55",
@@ -104,7 +103,7 @@ async function discoverElectionTypeIds(base: string, attempts: Array<Record<stri
     const timeout = setTimeout(() => controller.abort(), 10000);
     const response = await fetch(base + "/election-types", {
       method: "GET", signal: controller.signal,
-      headers: { "user-agent": UA, accept: "application/json, text/plain, */*", origin: ORIGIN, referer: ORIGIN + "/", "x-api-key": IREV_KEY, "x-api-rt": String(Date.now()) },
+      headers: { "user-agent": UA, accept: "application/json, text/plain, */*", origin: ORIGIN, referer: ORIGIN + "/", ...(IREV_KEY ? { "x-api-key": IREV_KEY } : {}), "x-api-rt": String(Date.now()) },
     });
     clearTimeout(timeout);
     const body = await response.text();
