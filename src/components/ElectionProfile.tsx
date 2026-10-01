@@ -13,7 +13,7 @@ interface PollingUnit { id: string; ward_id: string; name: string; pu_code: stri
 interface ElectionResultTotal { label: string; total_votes: number | null; reported_polling_units: number | null; polling_units_with_entry: number | null; verified_result_sheets: number | null; }
 interface GeographicResultTotal extends ElectionResultTotal { state_id: string | null; lga_id: string | null; ward_id: string | null; }
 interface PollingUnitResult { election_id: string; polling_unit_id: string | null; result_entry_id: string; label: string; votes: number | null; result_sheet_id: string; extraction_id: string; }
-interface ResultSheet { id: string; source_url: string; status: string; evidence_status: string | null; }
+interface ResultSheet { id: string; source_url: string; status: string; evidence_status: string | null; processed_at: string | null; polling_unit_id: string | null; polling_units: { name: string; pu_code: string | null } | null; }
 type Tab = "overview" | "candidates" | "timeline" | "polling" | "results" | "sources";
 type Category = "Federal" | "State" | "Local Government";
 interface MetricCardProps { label: string; value: string; icon: typeof Users; }
@@ -97,6 +97,7 @@ export function ElectionProfile({ selectedElectionId, onElectionSelect, onBackTo
   const [geographicTotals, setGeographicTotals] = useState<GeographicResultTotal[]>([]);
   const [pollingResults, setPollingResults] = useState<PollingUnitResult[]>([]);
   const [resultSheets, setResultSheets] = useState<ResultSheet[]>([]);
+  const [verifiedSheetCount, setVerifiedSheetCount] = useState(0);
   const [resultsLoading, setResultsLoading] = useState(false);
   const [resultsError, setResultsError] = useState("");
   const [q, setQ] = useState("");
@@ -211,6 +212,7 @@ export function ElectionProfile({ selectedElectionId, onElectionSelect, onBackTo
       setGeographicTotals([]);
       setPollingResults([]);
       setResultSheets([]);
+      setVerifiedSheetCount(0);
       return;
     }
 
@@ -220,12 +222,22 @@ export function ElectionProfile({ selectedElectionId, onElectionSelect, onBackTo
 
     async function loadResults(): Promise<void> {
       try {
-        const sheetResponse = await supabase!
-          .from("result_sheets")
-          .select("id,source_url,status,evidence_status")
-          .eq("election_id", selected);
+        const [sheetResponse, verifiedCountResponse] = await Promise.all([
+          supabase!
+            .from("result_sheets")
+            .select("id,source_url,status,evidence_status,processed_at,polling_unit_id,polling_units(name,pu_code)")
+            .eq("election_id", selected)
+            .order("processed_at", { ascending: false, nullsFirst: false })
+            .limit(24),
+          supabase!
+            .from("result_sheets")
+            .select("id", { count: "exact", head: true })
+            .eq("election_id", selected)
+            .eq("status", "verified"),
+        ]);
 
         if (sheetResponse.error) throw sheetResponse.error;
+        if (verifiedCountResponse.error) throw verifiedCountResponse.error;
 
         if (pollingUnitId) {
           const response = await supabase!
@@ -488,9 +500,25 @@ export function ElectionProfile({ selectedElectionId, onElectionSelect, onBackTo
                   </div>;
                 })}
               </div> : <EmptyState label="verified result" />}
-            {resultSheets.length > 0 && <div className="mt-5 flex flex-wrap items-center justify-between gap-3 border-t border-zinc-800/60 pt-4">
-              <p className="text-xs text-zinc-600">{num(resultSheets.length)} result sheets discovered for this election. Only verified extractions enter the totals above.</p>
-              {resultSheets.slice(0, 1).map((sheet) => <a key={sheet.id} href={sheet.source_url} target="_blank" rel="noreferrer" className="inline-flex shrink-0 items-center gap-2 text-xs font-medium text-zinc-300 hover:text-white">Open evidence <ExternalLink size={13} /></a>)}
+            {verifiedSheetCount > 0 && <div className="mt-5 border-t border-zinc-800/60 pt-5">
+              <div className="flex flex-wrap items-end justify-between gap-3">
+                <div>
+                  <p className="text-[10px] font-semibold uppercase tracking-[0.16em] text-zinc-600">Processed result archive</p>
+                  <p className="mt-1 text-xs text-zinc-500">{num(verifiedSheetCount)} result sheets have already been verified and are available directly from this portal.</p>
+                </div>
+                <span className="rounded-full border border-emerald-500/15 bg-emerald-500/5 px-2.5 py-1 text-[10px] font-medium text-emerald-300">No re-OCR required</span>
+              </div>
+              <div className="mt-4 space-y-2">
+                {resultSheets.filter((sheet) => sheet.status === "verified").slice(0, 8).map((sheet) => (
+                  <div key={sheet.id} className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-zinc-800/60 bg-zinc-950/35 px-3.5 py-3">
+                    <button type="button" onClick={() => sheet.polling_unit_id && setPollingUnitId(sheet.polling_unit_id)} className="min-w-0 text-left" disabled={!sheet.polling_unit_id}>
+                      <p className="truncate text-sm font-medium text-zinc-200">{sheet.polling_units?.name ?? "Processed polling unit"}</p>
+                      <p className="mt-0.5 text-[10px] text-zinc-600">{sheet.polling_units?.pu_code ?? "PU code unavailable"} · processed {fmt(sheet.processed_at)}</p>
+                    </button>
+                    <a href={sheet.source_url} target="_blank" rel="noreferrer" className="inline-flex shrink-0 items-center gap-1.5 text-[11px] font-medium text-zinc-400 hover:text-white">Evidence <ExternalLink size={12} /></a>
+                  </div>
+                ))}
+              </div>
             </div>}
           </div>
         </div>}
