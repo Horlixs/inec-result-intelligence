@@ -54,3 +54,5 @@ jobs:
 # queue-state checkpoint
 
 # post-success OCR persistence checkpoint
+
+# verify post-drain OCR counts
