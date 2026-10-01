@@ -627,17 +627,20 @@ async function discoverApiWardStructure(
     const lgaId = String(item.canonical.id);
     const wardsForLga = canonicalWards.get(lgaId) ?? [];
     const byNumericId = new Map<number, Record<string, unknown>>();
+    const byCode = new Map<string, Record<string, unknown>>();
     const byName = new Map<string, Record<string, unknown>>();
 
     for (const ward of wardsForLga) {
       const numeric = numericIdentity(ward.irev_ward_id);
       if (numeric != null) byNumericId.set(numeric, ward);
+      if (ward.code) byCode.set(String(ward.code).padStart(2, "0"), ward);
       const name = normalizeGeoName(ward.name);
       if (name) byName.set(name, ward);
     }
 
     for (const apiWard of item.api.wards) {
       let canonical =
+        (apiWard.code ? byCode.get(String(apiWard.code).padStart(2, "0")) : undefined) ??
         (apiWard.numericId != null ? byNumericId.get(apiWard.numericId) : undefined) ??
         (apiWard.name ? byName.get(normalizeGeoName(apiWard.name)) : undefined);
 
