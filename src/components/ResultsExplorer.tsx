@@ -89,7 +89,7 @@ export function ResultsExplorer({
         if (candidateRes.error) throw candidateRes.error;
         if (recordRes.error && !/does not exist|relation/i.test(recordRes.error.message)) throw recordRes.error;
         if (partyRes.error) throw partyRes.error;
-        if (identityRes.error) throw identityRes.error;
+        // Candidate/party enrichment is optional during rollout; the verified result layer remains usable if the view has not migrated yet.
         if (cancelled) return;
 
         const base = (candidateRes.data ?? []) as Candidate[];
