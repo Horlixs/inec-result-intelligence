@@ -1,8 +1,5 @@
 const IREV_BASE = "https://dolphin-app-sleqh.ondigitalocean.app/api/v1";
-const IREV_KEY = Deno.env.get("IREV_KEY")?.trim();
 const ALLOWED_ORIGIN = "https://inec-result-intelligence.vercel.app";
-
-if (!IREV_KEY) throw new Error("Missing IREV_KEY secret");
 
 const CORS = {
   "Access-Control-Allow-Origin": ALLOWED_ORIGIN,
@@ -72,26 +69,46 @@ function rows(payload: unknown) {
   return [];
 }
 
-async function irevGet(electionId: string, path: string) {
-  const response = await fetch(IREV_BASE + "/elections/" + encodeURIComponent(electionId) + path, {
-    headers: {
-      "user-agent": "INEC-Result-Intelligence/1.0 diagnostic",
-      accept: "application/json, text/plain, */*",
-      origin: "https://inecelectionresults.ng",
-      referer: "https://inecelectionresults.ng/",
-      "x-api-key": IREV_KEY,
-      "x-api-rt": String(Date.now()),
-    },
-  });
-  const text = await response.text();
-  let body: unknown = null;
-  try { body = text ? JSON.parse(text) : null; } catch {}
-  return {
-    status: response.status,
-    content_type: response.headers.get("content-type"),
-    length: text.length,
-    body,
-  };
+async function irevGet(electionId: string, path: string, secret: string) {
+  const url = IREV_BASE + "/elections/" + encodeURIComponent(electionId) + path;
+  try {
+    const response = await fetch(url, {
+      headers: {
+        "user-agent": "INEC-Result-Intelligence/1.0 diagnostic",
+        accept: "application/json, text/plain, */*",
+        origin: "https://inecelectionresults.ng",
+        referer: "https://inecelectionresults.ng/",
+        "x-api-key": secret,
+        "x-api-rt": String(Date.now()),
+      },
+    });
+    const responseText = await response.text();
+    let body: unknown = null;
+    let parseError: string | null = null;
+    try {
+      body = responseText ? JSON.parse(responseText) : null;
+    } catch (error) {
+      parseError = error instanceof Error ? error.message : String(error);
+    }
+    return {
+      ok: true,
+      status: response.status,
+      content_type: response.headers.get("content-type"),
+      length: responseText.length,
+      parse_error: parseError,
+      body,
+    };
+  } catch (error) {
+    return {
+      ok: false,
+      status: null,
+      content_type: null,
+      length: 0,
+      parse_error: null,
+      body: null,
+      error: error instanceof Error ? error.message : String(error),
+    };
+  }
 }
 
 Deno.serve(async request => {
@@ -99,6 +116,16 @@ Deno.serve(async request => {
   if (request.method !== "POST") return json({ ok: false, error: "POST required" }, 405);
 
   try {
+    const secret = Deno.env.get("IREV_KEY")?.trim();
+    if (!secret) {
+      console.error("[irev-diagnose-ward] Missing IREV_KEY secret");
+      return json({
+        ok: false,
+        stage: "initialization",
+        error: "Missing IREV_KEY secret in the Edge Function environment",
+      }, 500);
+    }
+
     const input = await request.json().catch(() => ({}));
     const electionId = String(input?.election_id ?? "").trim();
     const wardOid = objectId(input?.ward_oid);
@@ -106,18 +133,30 @@ Deno.serve(async request => {
     if (!objectId(electionId)) return json({ ok: false, error: "Invalid election_id" }, 400);
     if (!wardOid) return json({ ok: false, error: "Invalid ward_oid" }, 400);
 
-    const hierarchy = await irevGet(electionId, "/lga");
+    const hierarchy = await irevGet(electionId, "/lga", secret);
+    if (!hierarchy.ok) {
+      return json({
+        ok: false,
+        stage: "hierarchy_fetch",
+        election_id: electionId,
+        requested_ward_oid: wardOid,
+        error: hierarchy.error,
+      }, 502);
+    }
+
     const resolved = findWard(hierarchy.body, wardOid);
 
     if (!resolved) {
       return json({
         ok: true,
+        stage: "ward_resolution",
         election_id: electionId,
         requested_ward_oid: wardOid,
         hierarchy: {
           status: hierarchy.status,
           content_type: hierarchy.content_type,
           length: hierarchy.length,
+          parse_error: hierarchy.parse_error,
         },
         resolved: null,
         polling_units: null,
@@ -125,11 +164,23 @@ Deno.serve(async request => {
       });
     }
 
-    const pus = await irevGet(electionId, "/pus?ward=" + encodeURIComponent(resolved.oid!));
+    const pus = await irevGet(electionId, "/pus?ward=" + encodeURIComponent(resolved.oid!), secret);
+    if (!pus.ok) {
+      return json({
+        ok: false,
+        stage: "polling_units_fetch",
+        election_id: electionId,
+        requested_ward_oid: wardOid,
+        resolved,
+        error: pus.error,
+      }, 502);
+    }
+
     const puRows = rows(pus.body);
 
     return json({
       ok: true,
+      stage: "complete",
       election_id: electionId,
       requested_ward_oid: wardOid,
       resolved,
@@ -137,11 +188,13 @@ Deno.serve(async request => {
         status: hierarchy.status,
         content_type: hierarchy.content_type,
         length: hierarchy.length,
+        parse_error: hierarchy.parse_error,
       },
       polling_unit_response: {
         status: pus.status,
         content_type: pus.content_type,
         length: pus.length,
+        parse_error: pus.parse_error,
         success: isRecord(pus.body) ? pus.body.success ?? null : null,
         count: puRows.length,
         sample_keys: puRows.slice(0, 10).map(row => Object.keys(row)),
@@ -149,6 +202,11 @@ Deno.serve(async request => {
       },
     });
   } catch (error) {
-    return json({ ok: false, error: error instanceof Error ? error.message : String(error) }, 500);
+    console.error("[irev-diagnose-ward] Unexpected runtime error", error);
+    return json({
+      ok: false,
+      stage: "runtime",
+      error: error instanceof Error ? error.message : String(error),
+    }, 500);
   }
 });
