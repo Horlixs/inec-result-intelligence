@@ -27,8 +27,13 @@ function documentUrl(row: Record<string, unknown>, electionId: string) {
   const resolve = (value: unknown): string | null => { if (typeof value !== "string" || !value.trim()) return null; try { const u = new URL(value.trim(), "https://inecelectionresults.ng/"); if (u.protocol === "http:") u.protocol = "https:"; return u.protocol === "https:" ? u.toString() : null; } catch { return null; } };
   const inspect = (value: unknown): string | null => { const direct = resolve(value); if (direct) return direct; if (!value || typeof value !== "object") return null; const obj = value as Record<string, unknown>; for (const key of ["url", "document_url", "file_url", "src", "path", "href"]) { const found = resolve(obj[key]); if (found) return found; } return null; };
   for (const value of [row.document, row.result, row.result_sheet, row.file, row.file_url, row.document_url, row.url, row.href, pu?.document, pu?.result, pu?.result_sheet, pu?.file, pu?.file_url, pu?.document_url, pu?.url]) { const found = inspect(value); if (found) return found; }
-  const puId = String(pu?._id ?? row.polling_unit_oid ?? row.external_id ?? row._id ?? "").trim();
-  if (objectId(electionId) && objectId(puId)) return `https://inecelectionresults.ng/elections/${encodeURIComponent(electionId)}/pu/${encodeURIComponent(puId)}/document`;
+  for (const value of [row.old_documents, pu?.old_documents]) {
+    if (!Array.isArray(value)) continue;
+    for (const item of [...value].reverse()) {
+      const found = inspect(item);
+      if (found) return found;
+    }
+  }
   return null;
 }
 async function irevGet(electionId: string, path: string) {
