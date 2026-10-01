@@ -15,7 +15,6 @@ update public.result_sheets
 set
   status = 'skipped',
   last_error = 'IReV polling-unit record did not expose a document asset',
-  evidence_status = 'remote_only',
-  updated_at = now()
+  evidence_status = 'remote_only'
 where source_url like 'https://inecelectionresults.ng/elections/%/pu/%/document'
   and status in ('discovered', 'failed');
