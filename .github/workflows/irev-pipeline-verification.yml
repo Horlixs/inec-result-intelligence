@@ -48,3 +48,5 @@ jobs:
           PY
 
 # verification trigger checkpoint
+
+# post-refresh diagnostic checkpoint
