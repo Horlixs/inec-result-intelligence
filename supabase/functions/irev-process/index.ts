@@ -142,14 +142,21 @@ function pollingUnitRows(payload: unknown): Array<Record<string, unknown>> {
 }
 
 function extractDocumentUrl(row: Record<string, unknown>): { url: string; documentId: string | null } | null {
-  const document = row.document && typeof row.document === "object"
+  const nestedDocument = row.document && typeof row.document === "object"
     ? row.document as Record<string, unknown>
     : row.result && typeof row.result === "object"
       ? row.result as Record<string, unknown>
-      : null;
+      : row.result_sheet && typeof row.result_sheet === "object"
+        ? row.result_sheet as Record<string, unknown>
+        : null;
 
-  const value = document?.url ?? document?.document_url ?? document?.file_url ??
-    row.document_url ?? row.file_url ?? row.url;
+  // IReV has returned both { document: { url } } and { document: "https://..." }
+  // shapes in different API responses. Accept both instead of silently falling
+  // back to the SPA document route.
+  const directDocument = typeof row.document === "string" ? row.document : null;
+  const value = directDocument ??
+    nestedDocument?.url ?? nestedDocument?.document_url ?? nestedDocument?.file_url ??
+    row.document_url ?? row.file_url ?? row.url ?? row.href;
 
   if (typeof value !== "string" || !value.trim()) return null;
 
@@ -180,7 +187,7 @@ async function resolveCanonicalIrevSource(
   }
 
   const match = parsed.pathname.match(
-    /^\/elections\/([^/]+)\/pu\/([^/]+)\/document(?:\/)?$/,
+    /^\\/elections\\/([^/]+)\\/pu\\/([^/]+)\\/document(?:\\/)?$/,
   );
   if (!match) return { url: sourceUrl, documentId: null };
 
@@ -191,7 +198,7 @@ async function resolveCanonicalIrevSource(
 
   const { data: pollingUnit, error: pollingUnitError } = await supabase
     .from("polling_units")
-    .select("external_id,ward_id")
+    .select("external_id,ward_id,pu_code,name,irev_pu_id")
     .eq("id", pollingUnitId)
     .single();
   if (pollingUnitError || !pollingUnit) {
@@ -203,7 +210,7 @@ async function resolveCanonicalIrevSource(
 
   const { data: ward, error: wardError } = await supabase
     .from("wards")
-    .select("irev_ward_oid")
+    .select("irev_ward_oid,irev_ward_id")
     .eq("id", pollingUnit.ward_id)
     .single();
   if (wardError || !ward?.irev_ward_oid) {
@@ -213,23 +220,22 @@ async function resolveCanonicalIrevSource(
     );
   }
 
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), 20_000);
-  try {
+  const requestHeaders = {
+    "user-agent": UA,
+    accept: "application/json, text/plain, */*",
+    origin: ORIGIN,
+    referer: ORIGIN + "/",
+    ...(IREV_KEY ? { "x-api-key": IREV_KEY } : {}),
+    "x-api-rt": String(Date.now()),
+  };
+
+  const fetchWardRows = async (wardOid: string) => {
     const response = await fetchWithRetry(
       IREV_API_BASE + "/elections/" + encodeURIComponent(electionExternalId) +
-      "/pus?ward=" + encodeURIComponent(String(ward.irev_ward_oid)),
-      {
-        headers: {
-          "user-agent": UA,
-          accept: "application/json, text/plain, */*",
-          origin: ORIGIN,
-          referer: ORIGIN + "/",
-          ...(IREV_KEY ? { "x-api-key": IREV_KEY } : {}),
-          "x-api-rt": String(Date.now()),
-        },
-        signal: controller.signal,
-      },
+      "/pus?ward=" + encodeURIComponent(wardOid),
+      { headers: requestHeaders },
+      4,
+      20000,
     );
 
     if (!response.ok) {
@@ -238,33 +244,151 @@ async function resolveCanonicalIrevSource(
 
     const text = await response.text();
     const payload = text ? JSON.parse(text) : null;
-    const rows = pollingUnitRows(payload);
+    return pollingUnitRows(payload);
+  };
 
-    for (const row of rows) {
-      const nestedPu = row.polling_unit && typeof row.polling_unit === "object"
-        ? row.polling_unit as Record<string, unknown>
-        : null;
-      const puId = String(
-        nestedPu?._id ??
-        row.polling_unit_oid ??
-        row.external_id ??
-        row._id ??
-        "",
-      ).trim();
+  let rows = await fetchWardRows(String(ward.irev_ward_oid));
+  let resolvedWardOid = String(ward.irev_ward_oid);
 
-      if (
-        puId === routePuId ||
-        puId === String(pollingUnit.external_id ?? "").trim()
-      ) {
-        const document = extractDocumentUrl(row);
-        if (document) return document;
+  // Some IReV records have a stale/alternate ward object id. The public
+  // collector resolves this through the election /lga hierarchy before calling
+  // /pus, so mirror that behavior here instead of treating an empty /pus
+  // response as a document-page problem.
+  if (!rows.length) {
+    const hierarchyResponse = await fetchWithRetry(
+      IREV_API_BASE + "/elections/" + encodeURIComponent(electionExternalId) + "/lga",
+      { headers: requestHeaders },
+      4,
+      20000,
+    );
+    if (!hierarchyResponse.ok) {
+      throw new Error("IReV ward hierarchy resolution HTTP " + hierarchyResponse.status);
+    }
+
+    const hierarchyText = await hierarchyResponse.text();
+    const hierarchy = hierarchyText ? JSON.parse(hierarchyText) : null;
+    const hierarchyRows = hierarchy && typeof hierarchy === "object"
+      ? (hierarchy as Record<string, unknown>).data
+      : null;
+
+    let matchedWardOid: string | null = null;
+    if (Array.isArray(hierarchyRows)) {
+      const targetOid = String(ward.irev_ward_oid).toLowerCase();
+      const targetNumeric = Number(ward.irev_ward_id);
+
+      outer:
+      for (const lgaEntry of hierarchyRows) {
+        if (!lgaEntry || typeof lgaEntry !== "object") continue;
+        const lga = lgaEntry as Record<string, unknown>;
+        const wardRows = Array.isArray(lga.wards) ? lga.wards : [];
+        for (const wardEntry of wardRows) {
+          if (!wardEntry || typeof wardEntry !== "object") continue;
+          const candidate = wardEntry as Record<string, unknown>;
+          const candidateOid = String(candidate._id ?? "").trim();
+          const candidateNumeric = Number(candidate.ward_id ?? candidate.id);
+          if (
+            candidateOid &&
+            (
+              candidateOid.toLowerCase() === targetOid ||
+              (Number.isInteger(targetNumeric) && Number.isInteger(candidateNumeric) && candidateNumeric === targetNumeric)
+            )
+          ) {
+            matchedWardOid = candidateOid;
+            break outer;
+          }
+        }
       }
     }
 
-    return { url: sourceUrl, documentId: null };
-  } finally {
-    clearTimeout(timer);
+    if (matchedWardOid && matchedWardOid !== resolvedWardOid) {
+      rows = await fetchWardRows(matchedWardOid);
+      resolvedWardOid = matchedWardOid;
+    }
   }
+
+  const normaliseName = (value: unknown) =>
+    String(value ?? "").trim().toLowerCase().replace(/\\s+/g, " ");
+
+  const targetExternalId = String(pollingUnit.external_id ?? "").trim();
+  const targetCode = String(pollingUnit.pu_code ?? "").trim();
+  const targetName = normaliseName(pollingUnit.name);
+  const targetNumericId = Number(pollingUnit.irev_pu_id);
+
+  let matchedRow: Record<string, unknown> | null = null;
+
+  for (const row of rows) {
+    const nestedPu = row.polling_unit && typeof row.polling_unit === "object"
+      ? row.polling_unit as Record<string, unknown>
+      : null;
+
+    const rowIds = [
+      nestedPu?._id,
+      row.polling_unit_oid,
+      row.external_id,
+      row._id,
+    ].map(value => String(value ?? "").trim()).filter(Boolean);
+
+    const rowNumericId = Number(
+      nestedPu?.polling_unit_id ?? row.pu_id ?? row.polling_unit_id ?? row.id,
+    );
+    const rowCode = String(
+      row.pu_code ?? nestedPu?.pu_code ?? row.code ?? nestedPu?.code ?? "",
+    ).trim();
+    const rowName = normaliseName(
+      row.name ?? row.polling_unit_name ?? nestedPu?.name,
+    );
+
+    const idMatch =
+      rowIds.includes(routePuId) ||
+      (targetExternalId && rowIds.includes(targetExternalId));
+    const numericMatch =
+      Number.isInteger(targetNumericId) &&
+      Number.isInteger(rowNumericId) &&
+      targetNumericId === rowNumericId;
+    const codeMatch =
+      Boolean(targetCode) &&
+      Boolean(rowCode) &&
+      targetCode.toLowerCase() === rowCode.toLowerCase();
+    const nameMatch =
+      Boolean(targetName) &&
+      Boolean(rowName) &&
+      targetName === rowName;
+
+    if (idMatch || numericMatch || codeMatch || nameMatch) {
+      matchedRow = row;
+      break;
+    }
+  }
+
+  if (!matchedRow) {
+    throw new Error(
+      "IReV direct document could not be matched for polling unit " +
+      JSON.stringify({
+        route_pu_id: routePuId,
+        local_external_id: targetExternalId || null,
+        local_pu_code: targetCode || null,
+        local_name: targetName || null,
+        local_irev_pu_id: Number.isInteger(targetNumericId) ? targetNumericId : null,
+        ward_oid: resolvedWardOid,
+        rows_received: rows.length,
+      }),
+    );
+  }
+
+  const document = extractDocumentUrl(matchedRow);
+  if (!document) {
+    throw new Error(
+      "IReV polling-unit record matched, but it contains no direct document URL: " +
+      JSON.stringify({
+        route_pu_id: routePuId,
+        local_pu_code: targetCode || null,
+        local_name: targetName || null,
+        ward_oid: resolvedWardOid,
+      }),
+    );
+  }
+
+  return document;
 }
 
 async function fetchEvidence(sourceUrl: string) {
