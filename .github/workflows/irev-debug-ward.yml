@@ -36,4 +36,4 @@ jobs:
             -H "Authorization: Bearer $SUPABASE_ANON_KEY" \
             -H "apikey: $SUPABASE_ANON_KEY" \
             -H "Content-Type: application/json" \
-            -d '{"election_id":"6aae6541d0998b3b55a9af98","ward_oid":"5f0f39814d89fc3a883de129"}'
+            -d '{"election_id":"6aae6541d0998b3b55a9af98","ward_oid":"5f0f3aee8f77bb3acad09263"}'
