@@ -25,3 +25,5 @@ jobs:
           response=$(curl --fail-with-body --silent --show-error             -X POST "$SUPABASE_URL/functions/v1/irev-batch"             -H "Authorization: Bearer $SUPABASE_PUBLISHABLE_KEY"             -H "apikey: $SUPABASE_PUBLISHABLE_KEY"             -H "Content-Type: application/json"             -d '{}')
 
           echo "$response"
+
+# Gemini 3.8 smoke checkpoint
