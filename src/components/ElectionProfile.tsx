@@ -1,6 +1,8 @@
 import { ArrowUpRight, CalendarDays, CheckCircle2, ChevronDown, ChevronRight, ExternalLink, FileImage, MapPin, RefreshCw, Search, ShieldCheck, Users, XCircle } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { supabase } from "../lib/supabase";
+import { ResultsExplorer } from "./ResultsExplorer";
+import { CandidatesPanel } from "./CandidatesPanel";
 
 interface ElectionProfileProps { selectedElectionId?: string; onElectionSelect?: (electionId: string) => void; onBackToElections?: () => void; detailOnly?: boolean; }
 interface Election { id: string; name: string; election_type: string; election_date: string | null; source_url: string | null; status: string; }
@@ -10,10 +12,6 @@ interface State { id: string; name: string; code: string | null; }
 interface Lga { id: string; state_id: string; name: string; }
 interface Ward { id: string; lga_id: string; name: string; }
 interface PollingUnit { id: string; ward_id: string; name: string; pu_code: string | null; }
-interface ElectionResultTotal { label: string; total_votes: number | null; reported_polling_units: number | null; polling_units_with_entry: number | null; verified_result_sheets: number | null; }
-interface GeographicResultTotal extends ElectionResultTotal { state_id: string | null; lga_id: string | null; ward_id: string | null; }
-interface PollingUnitResult { election_id: string; polling_unit_id: string | null; result_entry_id: string; label: string; votes: number | null; result_sheet_id: string; extraction_id: string; }
-interface ResultSheet { id: string; source_url: string; status: string; evidence_status: string | null; processed_at: string | null; polling_unit_id: string | null; polling_unit_name?: string; polling_unit_code?: string | null; }
 type Tab = "overview" | "candidates" | "timeline" | "polling" | "results" | "sources";
 type Category = "Federal" | "State" | "Local Government";
 interface MetricCardProps { label: string; value: string; icon: typeof Users; }
@@ -25,7 +23,6 @@ const GUIDANCE = "https://inecnigeria.org/voters/education";
 const yearOf = (value?: string | null): string => value ? new Date(value).getFullYear().toString() : "Year unavailable";
 const fmt = (value?: string | null): string => value ? new Intl.DateTimeFormat("en-NG", { dateStyle: "medium" }).format(new Date(value)) : "Not published";
 const num = (value?: number | null): string => value == null ? "—" : new Intl.NumberFormat("en-NG").format(value);
-const pct = (expected?: number | null, uploaded?: number | null): number => expected && uploaded != null ? Math.min(100, Math.round(uploaded / expected * 1000) / 10) : 0;
 
 function categoryOf(type: string): Category {
   if (["presidential", "senatorial", "house_of_representatives"].includes(type)) return "Federal";
@@ -93,13 +90,6 @@ export function ElectionProfile({ selectedElectionId, onElectionSelect, onBackTo
   function clearElection(): void { setSelected(""); onBackToElections?.(); }
   const [sources, setSources] = useState<Source[]>([]);
   const [stats, setStats] = useState<Stats | null>(null);
-  const [resultTotals, setResultTotals] = useState<ElectionResultTotal[]>([]);
-  const [geographicTotals, setGeographicTotals] = useState<GeographicResultTotal[]>([]);
-  const [pollingResults, setPollingResults] = useState<PollingUnitResult[]>([]);
-  const [resultSheets, setResultSheets] = useState<ResultSheet[]>([]);
-  const [verifiedSheetCount, setVerifiedSheetCount] = useState(0);
-  const [resultsLoading, setResultsLoading] = useState(false);
-  const [resultsError, setResultsError] = useState("");
   const [q, setQ] = useState("");
   const [tab, setTab] = useState<Tab>("overview");
   const [loading, setLoading] = useState(true);
@@ -206,118 +196,6 @@ export function ElectionProfile({ selectedElectionId, onElectionSelect, onBackTo
     });
   }, [selected]);
 
-  useEffect(() => {
-    if (!supabase || !selected) {
-      setResultTotals([]);
-      setGeographicTotals([]);
-      setPollingResults([]);
-      setResultSheets([]);
-      setVerifiedSheetCount(0);
-      return;
-    }
-
-    const requestId = loadRequestRef.current;
-    setResultsLoading(true);
-    setResultsError("");
-
-    async function loadResults(): Promise<void> {
-      try {
-        const [sheetResponse, verifiedCountResponse] = await Promise.all([
-          supabase!
-            .from("result_sheets")
-            .select("id,source_url,status,evidence_status,processed_at,polling_unit_id")
-            .eq("election_id", selected)
-            .eq("status", "verified")
-            .not("processed_at", "is", null)
-            .order("processed_at", { ascending: false })
-            .limit(24),
-          supabase!
-            .from("result_sheets")
-            .select("id", { count: "exact", head: true })
-            .eq("election_id", selected)
-            .eq("status", "verified"),
-        ]);
-
-        if (sheetResponse.error) throw sheetResponse.error;
-        if (verifiedCountResponse.error) throw verifiedCountResponse.error;
-
-        const sheetRows = (sheetResponse.data ?? []) as ResultSheet[];
-        const pollingIds = [...new Set(sheetRows.map((sheet) => sheet.polling_unit_id).filter((id): id is string => Boolean(id)))];
-        let pollingMap = new Map<string, PollingUnit>();
-        if (pollingIds.length) {
-          const pollingResponse = await supabase!
-            .from("polling_units")
-            .select("id,ward_id,name,pu_code")
-            .in("id", pollingIds);
-          if (pollingResponse.error) throw pollingResponse.error;
-          pollingMap = new Map(((pollingResponse.data ?? []) as PollingUnit[]).map((unit) => [unit.id, unit]));
-        }
-
-        if (pollingUnitId) {
-          const response = await supabase!
-            .from("polling_unit_candidate_results")
-            .select("election_id,polling_unit_id,result_entry_id,label,votes,result_sheet_id,extraction_id")
-            .eq("election_id", selected)
-            .eq("polling_unit_id", pollingUnitId)
-            .order("label", { ascending: true });
-
-          if (response.error) throw response.error;
-          if (requestId !== loadRequestRef.current) return;
-          setPollingResults((response.data ?? []) as PollingUnitResult[]);
-          setResultTotals([]);
-          setGeographicTotals([]);
-        } else if (stateId) {
-          let query = supabase!
-            .from("geographic_candidate_totals")
-            .select("state_id,lga_id,ward_id,label,total_votes,reported_polling_units,polling_units_with_entry,verified_result_sheets")
-            .eq("election_id", selected)
-            .eq("state_id", stateId);
-
-          if (lgaId) query = query.eq("lga_id", lgaId);
-          if (wardId) query = query.eq("ward_id", wardId);
-
-          const response = await query.order("total_votes", { ascending: false });
-          if (response.error) throw response.error;
-          if (requestId !== loadRequestRef.current) return;
-          setGeographicTotals((response.data ?? []) as GeographicResultTotal[]);
-          setResultTotals([]);
-          setPollingResults([]);
-        } else {
-          const response = await supabase!
-            .from("election_candidate_totals")
-            .select("label,total_votes,reported_polling_units,polling_units_with_entry,verified_result_sheets")
-            .eq("election_id", selected)
-            .order("total_votes", { ascending: false });
-
-          if (response.error) throw response.error;
-          if (requestId !== loadRequestRef.current) return;
-          setResultTotals((response.data ?? []) as ElectionResultTotal[]);
-          setGeographicTotals([]);
-          setPollingResults([]);
-        }
-
-        if (requestId === loadRequestRef.current) {
-          setResultSheets(sheetRows.map((sheet) => ({
-            ...sheet,
-            polling_unit_name: sheet.polling_unit_id ? pollingMap.get(sheet.polling_unit_id)?.name : undefined,
-            polling_unit_code: sheet.polling_unit_id ? pollingMap.get(sheet.polling_unit_id)?.pu_code : undefined,
-          })));
-          setVerifiedSheetCount(verifiedCountResponse.count ?? 0);
-        }
-      } catch (cause) {
-        if (requestId !== loadRequestRef.current) return;
-        setResultsError(cause instanceof Error ? cause.message : "Verified result records could not be loaded.");
-        setResultTotals([]);
-        setGeographicTotals([]);
-        setPollingResults([]);
-        setResultSheets([]);
-      } finally {
-        if (requestId === loadRequestRef.current) setResultsLoading(false);
-      }
-    }
-
-    void loadResults();
-  }, [selected, stateId, lgaId, wardId, pollingUnitId]);
 
   const scopedRows = useMemo(() => rows.filter((row) => {
     const matchesYear = !year || yearOf(row.election_date) === year;
