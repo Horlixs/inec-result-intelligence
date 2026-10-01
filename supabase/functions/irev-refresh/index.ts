@@ -403,41 +403,18 @@ Deno.serve(async request => {
   try {
     stage = "irev-sync";
     const discovery = await invoke("irev-sync", { mode: "scheduled-refresh" });
-    stage = "drain-ward-jobs";
-    const wardJobs = await drainWardJobs(5);
-    stage = "enqueue-discovered-sheets";
-    const queued = await enqueueDiscoveredSheets();
-
-    let processed = 0;
-    let failed = 0;
-
-    for (let i = 0; i < MAX_JOBS_PER_REFRESH; i++) {
-      stage = "process-result-sheet";
-      const job = await claimJob();
-      if (!job) break;
-
-      try {
-        const result = await invoke("irev-process", {
-          result_sheet_id: job.result_sheet_id,
-        });
-
-        await finishJob(job.job_id, job.attempts, Boolean(result?.ok), result?.error);
-        if (result?.ok) processed++;
-        else failed++;
-      } catch (error) {
-        failed++;
-        try {
-          await finishJob(
-            job.job_id,
-            job.attempts,
-            false,
-            error instanceof Error ? error.message : String(error),
-          );
-        } catch {
-          // Preserve the original processing failure if queue bookkeeping also fails.
-        }
-      }
-    }
+    // IReV sync now only discovers elections and advances the durable election/ward
+    // queues. The dedicated OCR drain owns ward polling-unit discovery and result
+    // processing, so this refresh function must not duplicate that expensive work.
+    stage = "queue-state";
+    const [{ count: remaining }, { count: wardQueue }] = await Promise.all([
+      supabase.from("result_processing_jobs").select("id", { count: "exact", head: true }).in("status", ["queued", "processing"]),
+      supabase.from("irev_ward_sync_jobs").select("id", { count: "exact", head: true }).in("status", ["queued", "processing"]),
+    ]);
+    const processed = 0;
+    const failed = 0;
+    const wardJobs = { processed: 0, failed: 0 };
+    const queued = 0;
 
     const { count: remaining } = await supabase
       .from("result_processing_jobs")
@@ -459,6 +436,7 @@ Deno.serve(async request => {
         jobs_processed: processed,
         jobs_failed: failed,
         jobs_remaining: remaining ?? 0,
+        ward_jobs_remaining: wardQueue ?? 0,
         max_jobs_per_refresh: MAX_JOBS_PER_REFRESH,
       },
     });
