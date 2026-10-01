@@ -11,7 +11,7 @@ on:
 
 concurrency:
   group: irev-ocr-drain
-  cancel-in-progress: false
+  cancel-in-progress: true
 
 permissions:
   contents: read
@@ -30,50 +30,20 @@ jobs:
           test -n "$SUPABASE_URL"
           test -n "$SUPABASE_PUBLISHABLE_KEY"
 
-          total_processed=0
-          total_failed=0
+          response=$(curl --fail-with-body --silent --show-error \
+            --max-time 180 \
+            -X POST "$SUPABASE_URL/functions/v1/irev-batch" \
+            -H "Authorization: Bearer $SUPABASE_PUBLISHABLE_KEY" \
+            -H "apikey: $SUPABASE_PUBLISHABLE_KEY" \
+            -H "Content-Type: application/json" \
+            -d '{}')
 
-          for attempt in 1 2 3 4 5; do
-            echo "=== OCR drain pass $attempt/5 ==="
+          echo "$response"
 
-            response=$(curl --fail-with-body --silent --show-error \
-              --max-time 135 \
-              -X POST "$SUPABASE_URL/functions/v1/irev-batch" \
-              -H "Authorization: Bearer $SUPABASE_PUBLISHABLE_KEY" \
-              -H "apikey: $SUPABASE_PUBLISHABLE_KEY" \
-              -H "Content-Type: application/json" \
-              -d '{}')
-
-            echo "$response"
-
-            summary=$(python3 - "$response" <<'PY'
+          python3 - "$response" <<'PY'
           import json,sys
           d=json.loads(sys.argv[1])
           if not d.get("ok"):
               raise SystemExit("Batch returned failure: "+str(d.get("error")))
-          print(f"{d.get('processed',0)} {d.get('failed',0)} {d.get('remaining',0)} {d.get('remaining_sheet_jobs',0)} {1 if d.get('rate_limited') else 0}")
+          print("PROCESSED=",d.get("processed",0),"FAILED=",d.get("failed",0),"REMAINING=",d.get("remaining",0),"SHEET_QUEUE=",d.get("remaining_sheet_jobs",0),"RATE_LIMITED=",d.get("rate_limited",False))
           PY
-            )
-
-            read processed failed remaining remaining_sheets rate_limited <<< "$summary"
-            total_processed=$((total_processed + processed))
-            total_failed=$((total_failed + failed))
-
-            echo "PASS=$attempt PROCESSED=$processed FAILED=$failed REMAINING=$remaining SHEET_QUEUE=$remaining_sheets RATE_LIMITED=$rate_limited"
-
-            if [ "$rate_limited" -eq 1 ]; then
-              echo "Gemini quota window is active; waiting 70 seconds before the next pass."
-              sleep 70
-              continue
-            fi
-
-            if [ "$remaining_sheets" -eq 0 ]; then
-              echo "OCR queue is empty."
-              break
-            fi
-
-            sleep 2
-          done
-
-          echo "TOTAL_PROCESSED=$total_processed"
-          echo "TOTAL_FAILED=$total_failed"
