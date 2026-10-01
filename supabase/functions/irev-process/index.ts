@@ -301,6 +301,19 @@ Deno.serve(async request => {
     }), { status: 404 });
   }
 
+  // A verified sheet is a terminal ingestion state. Never fetch or OCR it again
+  // from a retry/manual invocation; discovery also ignores existing rows.
+  if (sheet.status === "verified") {
+    return new Response(JSON.stringify({
+      ok: true,
+      result_sheet_id: id,
+      status: "already_verified",
+      evidence_retained: false,
+      source_url: sheet.source_url,
+      processed_at: sheet.processed_at ?? null,
+    }), { headers: { "content-type": "application/json" } });
+  }
+
   const attempt = (sheet.processing_attempts ?? 0) + 1;
 
   await supabase.from("result_sheets").update({
