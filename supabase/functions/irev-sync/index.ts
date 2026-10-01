@@ -420,7 +420,8 @@ async function discoverApiWardStructure(
     numericId: number | null;
     oid: string | null;
     name: string | null;
-    wards: Array<{ numericId: number | null; oid: string | null; name: string | null }>;
+    code: string | null;
+    wards: Array<{ numericId: number | null; oid: string | null; name: string | null; code: string | null }>;
   };
 
   const apiLgas: ApiLga[] = [];
@@ -430,7 +431,8 @@ async function discoverApiWardStructure(
     const numericId = numericIdentity(row.lga_id ?? row.id ?? lgaObject?.lga_id ?? lgaObject?.id);
     const oidCandidate = String(row._id ?? row.oid ?? lgaObject?._id ?? lgaObject?.oid ?? "").trim();
     const oid = /^[a-f0-9]{24}$/i.test(oidCandidate) ? oidCandidate : null;
-    const name = String(row.name ?? row.lga_name ?? lgaObject?.name ?? lgaObject?.lga_name ?? "").trim() || null;
+    const name = String(lgaObject?.name ?? row.lga_name ?? row.name ?? "").trim() || null;
+    const code = String(lgaObject?.code ?? row.lga_code ?? row.code ?? "").trim() || null;
     const key = oid ?? (String(numericId ?? "null") + ":" + normalizeGeoName(name));
     if (!key || lgaSeen.has(key)) continue;
     lgaSeen.add(key);
@@ -443,6 +445,7 @@ async function discoverApiWardStructure(
             numericId: wardNumeric,
             oid: /^[a-f0-9]{24}$/i.test(wardOidCandidate) ? wardOidCandidate : null,
             name: String(ward.name ?? ward.ward_name ?? "").trim() || null,
+            code: String(ward.code ?? ward.ward_code ?? "").trim() || null,
           };
         }).filter((ward) => ward.oid || ward.numericId != null || ward.name)
       : [];
