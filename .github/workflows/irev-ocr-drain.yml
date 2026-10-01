@@ -2,7 +2,8 @@ name: IReV OCR Drain
 
 on:
   schedule:
-    - cron: "7 * * * *"
+    # Remote worker: keep draining without requiring the user to open GitHub.
+    - cron: "4/5 * * * *"
   workflow_dispatch:
   push:
     paths:
@@ -35,7 +36,13 @@ jobs:
           for attempt in 1 2 3 4 5; do
             echo "=== OCR drain pass $attempt/5 ==="
 
-            response=$(curl --fail-with-body --silent --show-error               --max-time 135               -X POST "$SUPABASE_URL/functions/v1/irev-batch"               -H "Authorization: Bearer $SUPABASE_PUBLISHABLE_KEY"               -H "apikey: $SUPABASE_PUBLISHABLE_KEY"               -H "Content-Type: application/json"               -d '{}')
+            response=$(curl --fail-with-body --silent --show-error \
+              --max-time 135 \
+              -X POST "$SUPABASE_URL/functions/v1/irev-batch" \
+              -H "Authorization: Bearer $SUPABASE_PUBLISHABLE_KEY" \
+              -H "apikey: $SUPABASE_PUBLISHABLE_KEY" \
+              -H "Content-Type: application/json" \
+              -d '{}')
 
             echo "$response"
 
