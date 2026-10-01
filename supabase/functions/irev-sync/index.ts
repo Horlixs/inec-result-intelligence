@@ -497,6 +497,7 @@ async function discoverApiWardStructure(
   // known IReV state. This is deliberately conservative: ambiguous ward names
   // are ignored rather than mapped to the wrong LGA.
   const fallbackWardByName = new Map<string, Record<string, unknown>>();
+  const fallbackLgaByCode = new Map<string, Record<string, unknown>>();
   const fallbackWardAmbiguous = new Set<string>();
   let fallbackStateResolved = false;
   let fallbackWardRows = 0;
@@ -539,6 +540,10 @@ async function discoverApiWardStructure(
                   .map(row => [String(row.id), row]),
               );
 
+              for (const lga of lgaLookup.body as Array<Record<string, unknown>>) {
+                if (lga.code) fallbackLgaByCode.set(String(lga.code).padStart(2, "0"), lga);
+              }
+
               for (const ward of wardLookup.body as Array<Record<string, unknown>>) {
                 const key = normalizeGeoName(ward.name);
                 if (!key) continue;
@@ -559,6 +564,13 @@ async function discoverApiWardStructure(
     }
   }
 
+  if (fallbackLgaByCode.size) {
+    resolvedLgas = resolvedLgas.map(item => {
+      if (item.canonical?.id || !item.api.code) return item;
+      const canonical = fallbackLgaByCode.get(String(item.api.code).padStart(2, "0"));
+      return canonical?.id ? { api: item.api, canonical } : item;
+    }).filter((item): item is { api: ApiLga; canonical: Record<string, unknown> } => !!item.canonical?.id);
+  }
 
   const unresolvedLgas = apiLgas.filter((api) =>
     !resolvedLgas.some((item) => item.api === api)
