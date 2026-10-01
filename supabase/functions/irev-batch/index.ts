@@ -6,7 +6,9 @@ const supabase = createClient(SUPABASE_URL, SERVICE_KEY);
 const IREV_BASE = "https://dolphin-app-sleqh.ondigitalocean.app/api/v1";
 const IREV_KEY = Deno.env.get("IREV_KEY")?.trim() || null;
 const MAX_WARD_JOBS = 1;
-const MAX_SHEET_JOBS = 3;
+const CONCURRENT_SHEET_JOBS = 3;
+const MAX_SHEET_BATCHES = 3;
+const MAX_SHEET_JOBS = CONCURRENT_SHEET_JOBS * MAX_SHEET_BATCHES;
 const MAX_ATTEMPTS = 3;
 const DEADLINE_MS = 110_000;
 const WORKER_ID = `irev-batch:${crypto.randomUUID()}`;
@@ -175,7 +177,7 @@ Deno.serve(async request => {
     // Claim and process up to three sheets concurrently. The next batch is not
     // claimed until every job in the current batch has settled.
     while (sheetProcessed + sheetFailed < MAX_SHEET_JOBS && Date.now() - started < DEADLINE_MS) {
-      const claimCount = Math.min(MAX_SHEET_JOBS - sheetProcessed - sheetFailed, 3);
+      const claimCount = Math.min(CONCURRENT_SHEET_JOBS, MAX_SHEET_JOBS - sheetProcessed - sheetFailed);
       const claimed = (await Promise.all(Array.from({ length: claimCount }, () => claimSheet()))).filter(Boolean) as Array<Record<string, unknown>>;
       if (!claimed.length) break;
 
@@ -219,7 +221,7 @@ Deno.serve(async request => {
       jobs_failed_last_run: sheetFailed,
       last_error: sheetFailed > 0 ? (sheetDiagnostics.find(x => x.error)?.error as string ?? null) : null,
     }) ?? { total: 0, ward_jobs: 0, sheet_jobs: 0 };
-    return json({ ok: true, run_id: runId, queued, processed: sheetProcessed, failed: sheetFailed, ward_jobs: { processed: wardProcessed, failed: wardFailed }, ward_diagnostics: wardDiagnostics, sheet_diagnostics: sheetDiagnostics, remaining: remaining.total, remaining_ward_jobs: remaining.ward_jobs, remaining_sheet_jobs: remaining.sheet_jobs, max_ward_jobs: MAX_WARD_JOBS, max_sheet_jobs: MAX_SHEET_JOBS, concurrent_sheet_jobs: 3, rate_limited: rateLimited, elapsed_ms: Date.now() - started });
+    return json({ ok: true, run_id: runId, queued, processed: sheetProcessed, failed: sheetFailed, ward_jobs: { processed: wardProcessed, failed: wardFailed }, ward_diagnostics: wardDiagnostics, sheet_diagnostics: sheetDiagnostics, remaining: remaining.total, remaining_ward_jobs: remaining.ward_jobs, remaining_sheet_jobs: remaining.sheet_jobs, max_ward_jobs: MAX_WARD_JOBS, max_sheet_jobs: MAX_SHEET_JOBS, concurrent_sheet_jobs: CONCURRENT_SHEET_JOBS, rate_limited: rateLimited, elapsed_ms: Date.now() - started });
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     await updateHeartbeat({
