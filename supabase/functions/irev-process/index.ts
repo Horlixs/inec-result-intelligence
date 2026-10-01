@@ -142,37 +142,68 @@ function pollingUnitRows(payload: unknown): Array<Record<string, unknown>> {
 }
 
 function extractDocumentUrl(row: Record<string, unknown>): { url: string; documentId: string | null } | null {
-  const nestedDocument = row.document && typeof row.document === "object"
-    ? row.document as Record<string, unknown>
-    : row.result && typeof row.result === "object"
-      ? row.result as Record<string, unknown>
-      : row.result_sheet && typeof row.result_sheet === "object"
-        ? row.result_sheet as Record<string, unknown>
-        : null;
+  const nestedPu = row.polling_unit && typeof row.polling_unit === "object"
+    ? row.polling_unit as Record<string, unknown>
+    : null;
 
-  // IReV has returned both { document: { url } } and { document: "https://..." }
-  // shapes in different API responses. Accept both instead of silently falling
-  // back to the SPA document route.
-  const directDocument = typeof row.document === "string" ? row.document : null;
-  const value = directDocument ??
-    nestedDocument?.url ?? nestedDocument?.document_url ?? nestedDocument?.file_url ??
-    row.document_url ?? row.file_url ?? row.url ?? row.href;
+  const candidates: unknown[] = [
+    row.document,
+    row.result,
+    row.result_sheet,
+    row.file,
+    row.file_url,
+    row.document_url,
+    row.url,
+    row.href,
+    nestedPu?.document,
+    nestedPu?.result,
+    nestedPu?.result_sheet,
+    nestedPu?.file,
+    nestedPu?.file_url,
+    nestedPu?.document_url,
+    nestedPu?.url,
+    nestedPu?.href,
+  ];
 
-  if (typeof value !== "string" || !value.trim()) return null;
+  const inspect = (value: unknown): { url: string; documentId: string | null } | null => {
+    if (typeof value === "string" && value.trim()) {
+      try {
+        const url = new URL(value.trim(), ORIGIN + "/");
+        if (url.protocol === "http:") url.protocol = "https:";
+        if (url.protocol !== "https:") return null;
+        return { url: url.toString(), documentId: null };
+      } catch {
+        return null;
+      }
+    }
 
-  try {
-    const url = new URL(value.trim(), ORIGIN + "/");
-    if (url.protocol === "http:") url.protocol = "https:";
-    if (url.protocol !== "https:") return null;
+    if (!value || typeof value !== "object") return null;
 
+    const object = value as Record<string, unknown>;
     const documentId = String(
-      nestedDocument?._id ?? row.document_id ?? ""
+      object._id ?? object.id ?? object.document_id ?? ""
     ).trim() || null;
 
-    return { url: url.toString(), documentId };
-  } catch {
+    for (const key of ["url", "document_url", "file_url", "src", "path", "href"]) {
+      const found = inspect(object[key]);
+      if (found) return { ...found, documentId: found.documentId ?? documentId };
+    }
+
+    // Some API responses wrap the actual asset one level deeper.
+    for (const key of ["document", "result", "result_sheet", "file"]) {
+      const found = inspect(object[key]);
+      if (found) return { ...found, documentId: found.documentId ?? documentId };
+    }
+
     return null;
+  };
+
+  for (const candidate of candidates) {
+    const found = inspect(candidate);
+    if (found) return found;
   }
+
+  return null;
 }
 
 async function resolveCanonicalIrevSource(
