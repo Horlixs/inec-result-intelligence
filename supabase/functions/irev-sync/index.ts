@@ -484,7 +484,7 @@ async function discoverApiWardStructure(
     }
   }
 
-  const resolvedLgas = apiLgas.map((api) => ({
+  let resolvedLgas = apiLgas.map((api) => ({
     api,
     canonical: (api.numericId != null ? canonicalLgaByIrevId.get(api.numericId) : undefined) ??
       (api.name ? canonicalLgaByName.get(normalizeGeoName(api.name)) : undefined),
