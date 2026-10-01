@@ -10,7 +10,7 @@ Deno.serve(async request => {
 
   try {
     const [sheets, extractions, entries, checks] = await Promise.all([
-      supabase.from("result_sheets").select("id,status,evidence_status,processed_at,last_error").order("processed_at", { ascending: false, nullsFirst: false }).limit(10),
+      supabase.from("result_sheets").select("id,status,evidence_status,processed_at,processing_attempts,last_error,source_url,evidence_url,mime_type,evidence_size_bytes").order("processed_at", { ascending: false, nullsFirst: false }).limit(10),
       supabase.from("extractions").select("id,result_sheet_id,engine,engine_version,confidence,status,created_at").order("created_at", { ascending: false }).limit(10),
       supabase.from("result_entries").select("id,extraction_id,label,votes").order("id", { ascending: false }).limit(20),
       supabase.from("validation_checks").select("id,extraction_id,check_name,passed,severity").order("id", { ascending: false }).limit(20),
@@ -33,6 +33,7 @@ Deno.serve(async request => {
         result_entries: entries.data?.length ?? 0,
         validation_checks: checks.data?.length ?? 0,
       },
+      latest_sheets: (sheets.data ?? []).slice(0, 10),
       latest_extraction: extractions.data?.[0] ?? null,
       latest_entries: (entries.data ?? []).slice(0, 10),
       latest_checks: (checks.data ?? []).slice(0, 10),
