@@ -3,6 +3,7 @@ name: IReV OCR Drain
 on:
   schedule:
     # Remote worker: keep draining without requiring the user to open GitHub.
+    # The schedule is intentionally independent of application deployments.
     - cron: "*/5 * * * *"
   workflow_dispatch:
   push:
