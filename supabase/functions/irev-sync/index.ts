@@ -783,7 +783,7 @@ Deno.serve(async request => {
             Number.isFinite(electionStateId) && electionStateId >= 1 && electionStateId <= 37
               ? electionStateId
               : null;
-          const stateIdFromName = election.name.match(/(?:^|[-\\s])(\\d{2})[-\\s]/);
+          const stateIdFromName = election.name.match(/(?:^|[-\s])(\d{2})[-\s]/);
           const parsedStateId = stateIdFromName ? Number(stateIdFromName[1]) : null;
           const validParsedStateId =
             parsedStateId && parsedStateId >= 1 && parsedStateId <= 37
