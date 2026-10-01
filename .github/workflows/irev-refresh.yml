@@ -6,7 +6,7 @@ on:
       - ".github/workflows/irev-refresh.yml"
   schedule:
     # Remote worker: refresh discovery/queue every 5 minutes without user activity.
-    # OCR drain is chained from this workflow as a backup trigger.
+    # OCR drain is chained from this workflow as a backup trigger. # mapping verification checkpoint
     - cron: "2/5 * * * *"
   workflow_dispatch:
   workflow_run:
