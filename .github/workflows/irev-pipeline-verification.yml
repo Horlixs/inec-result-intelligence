@@ -52,3 +52,5 @@ jobs:
 # post-refresh diagnostic checkpoint
 
 # queue-state checkpoint
+
+# post-success OCR persistence checkpoint
