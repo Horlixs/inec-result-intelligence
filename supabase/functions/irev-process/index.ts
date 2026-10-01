@@ -238,7 +238,7 @@ If this is a PDF, inspect the document visually and use the result sheet itself,
   };
 
   const response = await fetch(
-    "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=" +
+    "https://generativelanguage.googleapis.com/v1beta/models/gemini-3.8-flash:generateContent?key=" +
       encodeURIComponent(geminiKey),
     {
       method: "POST",
@@ -344,7 +344,7 @@ Deno.serve(async request => {
       .insert({
         result_sheet_id: id,
         engine: "google-gemini",
-        engine_version: "gemini-2.5-flash",
+        engine_version: "gemini-3.8-flash",
         raw_output: extracted,
         confidence: Number.isFinite(confidence) ? confidence : null,
         status: extractionStatus,
