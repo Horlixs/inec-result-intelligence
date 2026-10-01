@@ -541,6 +541,52 @@ async function discoverApiWardStructure(
     }
   }
 
+  const currentOids = [...new Set(
+    wardUpdates
+      .map((row) => objectId(row.irev_ward_oid))
+      .filter((value): value is string => !!value),
+  )];
+
+  if (currentOids.length) {
+    const clear = await supabaseRest(
+      "wards?irev_ward_oid=in.(" + currentOids.join(",") + ")",
+      {
+        method: "PATCH",
+        headers: { Prefer: "return=minimal" },
+        body: JSON.stringify({ irev_ward_oid: null }),
+      },
+    );
+    const clearError = supabaseError("stale ward OID cleanup", clear);
+    if (clearError) throw clearError;
+  }
+
+  if (wardUpdates.length) {
+    const update = await supabaseRest(
+      "wards?on_conflict=id",
+      {
+        method: "POST",
+        headers: { Prefer: "resolution=merge-duplicates,return=minimal" },
+        body: JSON.stringify(wardUpdates),
+      },
+    );
+    const updateError = supabaseError("canonical ward identity upsert", update);
+    if (updateError) throw updateError;
+    queued = jobs.length;
+  }
+
+  if (jobs.length) {
+    const job = await supabaseRest(
+      "irev_ward_sync_jobs?on_conflict=election_id,ward_id",
+      {
+        method: "POST",
+        headers: { Prefer: "resolution=merge-duplicates,return=minimal" },
+        body: JSON.stringify(jobs),
+      },
+    );
+    const jobError = supabaseError("ward job batch upsert", job);
+    if (jobError) throw jobError;
+  }
+
   diagnostics.push({
     type: "ward_mapping",
     election_id: electionExternalId,
