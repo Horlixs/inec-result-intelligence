@@ -750,6 +750,10 @@ async function discoverApiWardStructure(
     queued_jobs: queued,
     fallback_state_resolved: fallbackStateResolved,
     fallback_ward_rows: fallbackWardRows,
+    parsed_lgas: apiLgas.map(lga => ({ name: lga.name, code: lga.code, numeric_id: lga.numericId, ward_count: lga.wards.length })),
+    fallback_lga_codes: [...fallbackLgaByCode.keys()],
+    resolved_lgas: resolvedLgas.map(item => ({ name: item.api.name, code: item.api.code, canonical_id: item.canonical.id })),
+
   });
 
   return queued;
