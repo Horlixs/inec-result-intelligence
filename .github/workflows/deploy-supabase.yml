@@ -45,3 +45,6 @@ jobs:
 
       - name: Deploy Edge Functions
         run: supabase functions deploy --project-ref "$SUPABASE_PROJECT_ID"
+
+      # Keep the deployment workflow itself versioned so schema/worker deployments
+      # are re-triggered whenever the pipeline infrastructure changes.
