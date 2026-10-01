@@ -16,22 +16,21 @@ jobs:
       - name: Verify persisted pipeline state
         env:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
-          SUPABASE_ANON_KEY: ${{ secrets.SUPABASE_ANON_KEY }}
+          SUPABASE_PUBLISHABLE_KEY: ${{ secrets.SUPABASE_PUBLISHABLE_KEY }}
         run: |
           set -euo pipefail
           test -n "$SUPABASE_URL"
-          test -n "$SUPABASE_SERVICE_ROLE_KEY"
-          response=$(curl --fail-with-body --silent --show-error \
-            -X POST "$SUPABASE_URL/functions/v1/irev-verify-pipeline" \
-            -H "Authorization: Bearer $SUPABASE_ANON_KEY" \
-            -H "apikey: $SUPABASE_ANON_KEY" \
-            -H "Content-Type: application/json" \
-            -d '{}')
+          test -n "$SUPABASE_PUBLISHABLE_KEY"
+
+          response=$(curl --fail-with-body --silent --show-error             -X POST "$SUPABASE_URL/functions/v1/irev-verify-pipeline"             -H "Authorization: Bearer $SUPABASE_PUBLISHABLE_KEY"             -H "apikey: $SUPABASE_PUBLISHABLE_KEY"             -H "Content-Type: application/json"             -d '{}')
+
           echo "$response"
+
           python3 - "$response" <<'PY'
           import json,sys
           data=json.loads(sys.argv[1])
-          if not data.get("ok"): raise SystemExit("Verification function failed: "+str(data.get("error")))
+          if not data.get("ok"):
+              raise SystemExit("Verification function failed: "+str(data.get("error")))
           c=data["counts"]
           print("COUNTS:",json.dumps(c,separators=(",",":")))
           if not all(c.get(k,0)>0 for k in ("processed_sheets","extractions","result_entries","validation_checks")):
