@@ -487,61 +487,25 @@ export function ElectionProfile({ selectedElectionId, onElectionSelect, onBackTo
 
         {tab === "polling" && <div className="mt-5 rounded-2xl border border-zinc-800/60 bg-zinc-900/40 p-6"><p className="text-[10px] font-semibold uppercase tracking-[0.18em] text-zinc-600">Polling operations</p><h3 className="mt-3 font-display text-xl font-semibold">Official operating guidance</h3><p className="mt-3 max-w-2xl text-sm leading-6 text-zinc-500">Current INEC guidance covers polling-unit opening, accreditation, voting and BVAS verification.</p><div className="mt-5 grid gap-3 sm:grid-cols-2"><div className="rounded-xl border border-zinc-800/60 bg-zinc-950/40 p-4"><p className="text-xs text-zinc-600">General window</p><p className="mt-1 text-sm font-medium text-zinc-200">08:30–14:30</p></div><div className="rounded-xl border border-zinc-800/60 bg-zinc-950/40 p-4"><p className="text-xs text-zinc-600">Verification</p><p className="mt-1 text-sm font-medium text-zinc-200">PVC + BVAS</p></div></div><a href={GUIDANCE} target="_blank" rel="noreferrer" className="mt-5 inline-flex items-center gap-2 text-xs font-medium text-zinc-300 hover:text-white">View INEC guidance <ExternalLink size={13} /></a></div>}
 
-        {tab === "results" && <div className="mt-5 space-y-5">
-          <div className="rounded-2xl border border-zinc-800/60 bg-zinc-900/40 p-6">
-            <div className="flex flex-col gap-4 sm:flex-row sm:items-end sm:justify-between">
-              <div>
-                <p className="text-[10px] font-semibold uppercase tracking-[0.18em] text-zinc-600">Verified result layer</p>
-                <h3 className="mt-2 font-display text-xl font-semibold">Recorded votes from verified result sheets</h3>
-                <p className="mt-1 text-xs leading-5 text-zinc-600">{pollingUnitId ? "Exact polling-unit entries." : stateId ? "Aggregated within the selected geographic scope." : "Election-wide aggregation from verified polling-unit entries."}</p>
-              </div>
-              <div className="text-left sm:text-right">
-                <p className="text-[10px] uppercase tracking-[0.14em] text-zinc-600">Sheet coverage</p>
-                <p className="mt-1 font-display text-2xl font-semibold text-zinc-100">{pct(stats?.result_sheets_expected, stats?.result_sheets_uploaded)}%</p>
-              </div>
-            </div>
-            {resultsError && <div className="mt-5 rounded-xl border border-amber-500/20 bg-amber-500/5 p-4 text-xs text-amber-200">{resultsError}</div>}
-            {resultsLoading ? <div className="mt-6 space-y-2">{[1,2,3,4].map((item) => <div key={item} className="h-12 animate-pulse rounded-xl bg-zinc-800/40" />)}</div> :
-              pollingResults.length || resultTotals.length || geographicTotals.length ? <div className="mt-6 overflow-hidden rounded-xl border border-zinc-800/60">
-                <div className="grid grid-cols-[minmax(0,1fr)_auto_auto_auto] gap-4 border-b border-zinc-800/60 bg-zinc-950/50 px-4 py-3 text-[10px] font-semibold uppercase tracking-[0.12em] text-zinc-600">
-                  <span>Candidate / result label</span><span className="text-right">Votes</span><span className="hidden text-right sm:block">Polling units</span><span className="hidden text-right md:block">Verified sheets</span>
-                </div>
-                {(pollingResults.length ? pollingResults : (stateId ? geographicTotals : resultTotals)).map((row) => {
-                  const isPolling = "result_entry_id" in row;
-                  const votes = isPolling ? row.votes : row.total_votes;
-                  const units = isPolling ? 1 : row.polling_units_with_entry;
-                  const sheets = isPolling ? 1 : row.verified_result_sheets;
-                  return <div key={isPolling ? row.result_entry_id : row.label} className="grid grid-cols-[minmax(0,1fr)_auto_auto_auto] gap-4 border-b border-zinc-800/50 px-4 py-3.5 last:border-0">
-                    <div className="min-w-0"><p className="truncate text-sm font-medium text-zinc-200">{row.label}</p>{isPolling && <p className="mt-0.5 text-[10px] text-zinc-600">Verified polling-unit entry</p>}</div>
-                    <span className="font-display text-sm font-semibold text-zinc-100">{num(votes)}</span>
-                    <span className="hidden text-right text-xs text-zinc-500 sm:block">{num(units)}</span>
-                    <span className="hidden text-right text-xs text-zinc-500 md:block">{num(sheets)}</span>
-                  </div>;
-                })}
-              </div> : <EmptyState label="verified result" />}
-            {verifiedSheetCount > 0 && <div className="mt-5 border-t border-zinc-800/60 pt-5">
-              <div className="flex flex-wrap items-end justify-between gap-3">
-                <div>
-                  <p className="text-[10px] font-semibold uppercase tracking-[0.16em] text-zinc-600">Processed result archive</p>
-                  <p className="mt-1 text-xs text-zinc-500">{num(verifiedSheetCount)} result sheets have already been verified and are available directly from this portal.</p>
-                </div>
-                <span className="rounded-full border border-emerald-500/15 bg-emerald-500/5 px-2.5 py-1 text-[10px] font-medium text-emerald-300">No re-OCR required</span>
-              </div>
-              <div className="mt-4 space-y-2">
-                {resultSheets.filter((sheet) => sheet.status === "verified").slice(0, 8).map((sheet) => (
-                  <div key={sheet.id} className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-zinc-800/60 bg-zinc-950/35 px-3.5 py-3">
-                    <button type="button" onClick={() => sheet.polling_unit_id && setPollingUnitId(sheet.polling_unit_id)} className="min-w-0 text-left" disabled={!sheet.polling_unit_id}>
-                      <p className="truncate text-sm font-medium text-zinc-200">{sheet.polling_unit_name ?? "Processed polling unit"}</p>
-                      <p className="mt-0.5 text-[10px] text-zinc-600">{sheet.polling_unit_code ?? "PU code unavailable"} · processed {fmt(sheet.processed_at)}</p>
-                    </button>
-                    <a href={sheet.source_url} target="_blank" rel="noreferrer" className="inline-flex shrink-0 items-center gap-1.5 text-[11px] font-medium text-zinc-400 hover:text-white">Evidence <ExternalLink size={12} /></a>
-                  </div>
-                ))}
-              </div>
-            </div>}
-          </div>
+        {tab === "results" && <div className="mt-5">
+          <ResultsExplorer
+            electionId={selected}
+            stateId={stateId}
+            lgaId={lgaId}
+            wardId={wardId}
+            pollingUnitId={pollingUnitId}
+            stateName={selectedState?.name}
+            lgaName={selectedLga?.name}
+            wardName={selectedWard?.name}
+            pollingUnitName={selectedPu?.name}
+            pollingUnitCode={selectedPu?.pu_code}
+            onState={(id) => { setStateId(id); setLgaId(""); setWardId(""); setPollingUnitId(""); }}
+            onLga={(id) => { setLgaId(id); setWardId(""); setPollingUnitId(""); }}
+            onWard={(id) => { setWardId(id); setPollingUnitId(""); }}
+            onPollingUnit={(id) => setPollingUnitId(id)}
+            onClear={() => { setStateId(""); setLgaId(""); setWardId(""); setPollingUnitId(""); }}
+          />
         </div>}
-
 
 
         {(tab === "sources" || tab === "candidates" || tab === "timeline") && (tab === "sources" ? sources.length ? <div className="mt-5 overflow-hidden rounded-2xl border border-zinc-800/60 bg-zinc-900/40">{sources.map((source) => <a key={source.id} href={source.url} target="_blank" rel="noreferrer" className="flex items-center justify-between gap-4 border-b border-zinc-800/60 p-4 transition-all duration-200 hover:bg-zinc-800/30 last:border-0"><div><p className="text-sm font-medium text-zinc-200">{source.title}</p><p className="mt-1 text-xs text-zinc-600">{source.source_type} · {fmt(source.published_at)}</p></div><ExternalLink size={15} className="shrink-0 text-zinc-600" /></a>)}</div> : <div className="mt-5"><EmptyState label="source" /></div> : <div className="mt-5"><EmptyState label={tab} /></div>)}
