@@ -9,15 +9,19 @@ Deno.serve(async request => {
   if (request.method !== "POST") return new Response("POST required", { status: 405 });
 
   try {
-    const [sheets, extractions, entries, checks, jobs] = await Promise.all([
-      supabase.from("result_sheets").select("id,status,evidence_status,processed_at,processing_attempts,last_error,source_url,evidence_url,mime_type,evidence_size_bytes").order("processed_at", { ascending: false, nullsFirst: false }).limit(10),
+    const [sheets, extractions, entries, checks, jobs, processedSheets, allExtractions, allEntries, allChecks] = await Promise.all([
+      supabase.from("result_sheets").select("id,status,evidence_status,processed_at,last_error,source_url,evidence_url,mime_type,evidence_size_bytes").order("processed_at", { ascending: false, nullsFirst: false }).limit(10),
       supabase.from("extractions").select("id,result_sheet_id,engine,engine_version,confidence,status,created_at").order("created_at", { ascending: false }).limit(10),
       supabase.from("result_entries").select("id,extraction_id,label,votes").order("id", { ascending: false }).limit(20),
       supabase.from("validation_checks").select("id,extraction_id,check_name,passed,severity").order("id", { ascending: false }).limit(20),
       supabase.from("result_processing_jobs").select("id,result_sheet_id,status,attempts,last_error,available_at,completed_at").order("created_at", { ascending: false }).limit(20),
+      supabase.from("result_sheets").select("id", { count: "exact", head: true }).not("processed_at", "is", null),
+      supabase.from("extractions").select("id", { count: "exact", head: true }),
+      supabase.from("result_entries").select("id", { count: "exact", head: true }),
+      supabase.from("validation_checks").select("id", { count: "exact", head: true }),
     ]);
 
-    for (const result of [sheets, extractions, entries, checks, jobs]) {
+    for (const result of [sheets, extractions, entries, checks, jobs, processedSheets, allExtractions, allEntries, allChecks]) {
       if (result.error) throw result.error;
     }
 
@@ -28,11 +32,11 @@ Deno.serve(async request => {
       ok: true,
       counts: {
         result_sheets: sheets.data?.length ?? 0,
-        processed_sheets: processed.length,
+        processed_sheets: processedSheets.count ?? 0,
         success_or_review_sheets: successful.length,
-        extractions: extractions.data?.length ?? 0,
-        result_entries: entries.data?.length ?? 0,
-        validation_checks: checks.data?.length ?? 0,
+        extractions: allExtractions.count ?? 0,
+        result_entries: allEntries.count ?? 0,
+        validation_checks: allChecks.count ?? 0,
       },
       latest_sheets: (sheets.data ?? []).slice(0, 10),
       latest_extraction: extractions.data?.[0] ?? null,
