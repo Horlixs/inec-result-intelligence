@@ -102,7 +102,9 @@ async function processWard(job: Record<string, unknown>) {
     const sourceUrl = documentUrl(row, irevElectionId); if (!sourceUrl) continue;
     const document = row.document && typeof row.document === "object" ? row.document as Record<string, unknown> : {};
     const sourceExternalId = String(document._id ?? row.document_id ?? pu?.document_id ?? externalId ?? sourceUrl);
-    const result = await supabase.from("result_sheets").upsert({ election_id: electionId, polling_unit_id: pollingUnitId, source_url: sourceUrl, source_external_id: sourceExternalId, status: "discovered", evidence_status: "remote_only", storage_policy: "ephemeral", discovered_at: new Date().toISOString() }, { onConflict: "election_id,source_url" });
+    // Do not overwrite an existing sheet's processing state during discovery.
+    // Verified results are immutable from the perspective of the collector.
+    const result = await supabase.from("result_sheets").insert({ election_id: electionId, polling_unit_id: pollingUnitId, source_url: sourceUrl, source_external_id: sourceExternalId, status: "discovered", evidence_status: "remote_only", storage_policy: "ephemeral", discovered_at: new Date().toISOString() }, { ignoreDuplicates: true });
     if (result.error) throw result.error; sheets++;
   }
   return { polling_units: puRows.length, result_sheets: sheets, diagnostics };
