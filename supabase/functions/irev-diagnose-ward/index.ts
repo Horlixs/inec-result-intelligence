@@ -70,7 +70,7 @@ function rows(payload: unknown) {
   return [];
 }
 
-async function irevGet(electionId: string, path: string, secret: string) {
+async function irevGet(electionId: string, path: string, publicKey: string | null) {
   const url = IREV_BASE + "/elections/" + encodeURIComponent(electionId) + path;
   try {
     const response = await fetch(url, {
@@ -79,7 +79,7 @@ async function irevGet(electionId: string, path: string, secret: string) {
         accept: "application/json, text/plain, */*",
         origin: "https://inecelectionresults.ng",
         referer: "https://inecelectionresults.ng/",
-        "x-api-key": secret,
+        ...(publicKey ? { "x-api-key": publicKey } : {}),
         "x-api-rt": String(Date.now()),
       },
     });
@@ -117,15 +117,7 @@ Deno.serve(async request => {
   if (request.method !== "POST") return json({ ok: false, error: "POST required" }, 405);
 
   try {
-    const secret = Deno.env.get("IREV_KEY")?.trim();
-    if (!secret) {
-      console.error("[irev-diagnose-ward] Missing IREV_KEY secret");
-      return json({
-        ok: false,
-        stage: "initialization",
-        error: "Missing IREV_KEY secret in the Edge Function environment",
-      }, 500);
-    }
+    const publicKey = Deno.env.get("IREV_KEY")?.trim() || null;
 
     const input = await request.json().catch(() => ({}));
     const electionId = String(input?.election_id ?? "").trim();
@@ -134,7 +126,7 @@ Deno.serve(async request => {
     if (!objectId(electionId)) return json({ ok: false, error: "Invalid election_id" }, 400);
     if (!wardOid) return json({ ok: false, error: "Invalid ward_oid" }, 400);
 
-    const hierarchy = await irevGet(electionId, "/lga", secret);
+    const hierarchy = await irevGet(electionId, "/lga", publicKey);
     if (!hierarchy.ok) {
       return json({
         ok: false,
@@ -165,7 +157,7 @@ Deno.serve(async request => {
       });
     }
 
-    const pus = await irevGet(electionId, "/pus?ward=" + encodeURIComponent(resolved.oid!), secret);
+    const pus = await irevGet(electionId, "/pus?ward=" + encodeURIComponent(resolved.oid!), publicKey);
     if (!pus.ok) {
       return json({
         ok: false,
