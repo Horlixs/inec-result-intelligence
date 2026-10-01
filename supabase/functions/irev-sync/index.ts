@@ -603,7 +603,7 @@ async function discoverApiWardStructure(
   const canonicalWards = new Map<string, Array<Record<string, unknown>>>();
   if (canonicalLgaIds.length) {
     const lookup = await supabaseRest(
-      "wards?select=id,lga_id,name,irev_ward_id,irev_ward_oid&lga_id=in.(" + canonicalLgaIds.join(",") + ")",
+      "wards?select=id,lga_id,name,code,irev_ward_id,irev_ward_oid&lga_id=in.(" + canonicalLgaIds.join(",") + ")",
       { method: "GET" },
     );
     const lookupError = supabaseError("canonical ward geography lookup", lookup);
