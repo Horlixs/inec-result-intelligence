@@ -48,15 +48,21 @@ jobs:
           d=json.loads(sys.argv[1])
           if not d.get("ok"):
               raise SystemExit("Batch returned failure: "+str(d.get("error")))
-          print(f"{d.get('processed',0)} {d.get('failed',0)} {d.get('remaining',0)} {d.get('remaining_sheet_jobs',0)}")
+          print(f"{d.get('processed',0)} {d.get('failed',0)} {d.get('remaining',0)} {d.get('remaining_sheet_jobs',0)} {1 if d.get('rate_limited') else 0}")
           PY
             )
 
-            read processed failed remaining remaining_sheets <<< "$summary"
+            read processed failed remaining remaining_sheets rate_limited <<< "$summary"
             total_processed=$((total_processed + processed))
             total_failed=$((total_failed + failed))
 
-            echo "PASS=$attempt PROCESSED=$processed FAILED=$failed REMAINING=$remaining SHEET_QUEUE=$remaining_sheets"
+            echo "PASS=$attempt PROCESSED=$processed FAILED=$failed REMAINING=$remaining SHEET_QUEUE=$remaining_sheets RATE_LIMITED=$rate_limited"
+
+            if [ "$rate_limited" -eq 1 ]; then
+              echo "Gemini quota window is active; waiting 70 seconds before the next pass."
+              sleep 70
+              continue
+            fi
 
             if [ "$remaining_sheets" -eq 0 ]; then
               echo "OCR queue is empty."
