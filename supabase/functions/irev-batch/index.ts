@@ -98,6 +98,37 @@ function findWardInElectionLga(payload: unknown, wardOid: string, wardNumericId:
   }
   return null;
 }
+async function irevGet(electionId: string, path: string) {
+  const url = IREV_BASE + "/elections/" + encodeURIComponent(electionId) + path;
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 15000);
+  try {
+    const response = await fetch(url, {
+      headers: {
+        "user-agent": "INEC-Result-Intelligence/1.0 ward-worker",
+        "accept": "application/json, text/plain, */*",
+        "origin": "https://inecelectionresults.ng",
+        "referer": "https://inecelectionresults.ng/",
+        ...(IREV_KEY ? { "x-api-key": IREV_KEY } : {}),
+        "x-api-rt": String(Date.now()),
+      },
+      signal: controller.signal,
+    });
+    const body = await response.text();
+    if (!response.ok) throw new Error("IReV HTTP " + response.status + ": " + body.slice(0, 500));
+    try { return JSON.parse(body); } catch { throw new Error("IReV returned invalid JSON"); }
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+async function fetchWard(electionId: string, wardOid: string) {
+  return await irevGet(
+    electionId,
+    "/pus?ward=" + encodeURIComponent(wardOid),
+  );
+}
+
 async function claimWard() { const { data, error } = await supabase.rpc("claim_irev_ward_sync_job", { p_worker_id: WORKER_ID, p_max_attempts: MAX_ATTEMPTS }); if (error) throw error; return data?.[0] ?? null; }
 async function processWard(job: Record<string, unknown>) {
   const electionId = String(job.election_id);
