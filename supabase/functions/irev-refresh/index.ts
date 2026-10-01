@@ -410,8 +410,8 @@ Deno.serve(async request => {
       supabase.from("result_processing_jobs").select("id", { count: "exact", head: true }).in("status", ["queued", "processing"]),
       supabase.from("irev_ward_sync_jobs").select("id", { count: "exact", head: true }).in("status", ["queued", "processing"]),
     ]);
-    const processed = 0;
-    const failed = 0;
+    const processed = Number(discovery?.processed ?? 0);
+    const failed = Number(discovery?.failed_election_jobs ?? 0);
     const wardJobs = { processed: 0, failed: 0 };
     const queued = 0;
 
@@ -421,14 +421,14 @@ Deno.serve(async request => {
       status: failed ? "completed_with_errors" : "completed",
       trigger_source: "scheduled",
       discovered: discovery?.discovered ?? 0,
-      downloaded: processed,
-      extracted: processed,
+      downloaded: 0,
+      extracted: 0,
       failed,
       metadata: {
         mode: "scheduled-refresh",
         sheets_enqueued: queued,
-        jobs_processed: processed,
-        jobs_failed: failed,
+        election_jobs_processed: processed,
+        election_jobs_failed: failed,
         jobs_remaining: remaining ?? 0,
         ward_jobs_remaining: wardQueue ?? 0,
       },
