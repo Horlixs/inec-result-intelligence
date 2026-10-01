@@ -4,8 +4,7 @@ const SUPABASE_URL = Deno.env.get("SUPABASE_URL")!;
 const SERVICE_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
 const supabase = createClient(SUPABASE_URL, SERVICE_KEY);
 const IREV_BASE = "https://dolphin-app-sleqh.ondigitalocean.app/api/v1";
-const IREV_KEY = Deno.env.get("IREV_KEY")?.trim();
-if (!IREV_KEY) throw new Error("Missing IREV_KEY secret");
+const IREV_KEY = Deno.env.get("IREV_KEY")?.trim() || null;
 const MAX_WARD_JOBS = 1;
 const MAX_SHEET_JOBS = 1;
 const MAX_ATTEMPTS = 5;
@@ -34,7 +33,7 @@ async function irevGet(electionId: string, path: string) {
   const controller = new AbortController(); const timer = setTimeout(() => controller.abort(), 12_000);
   try {
     const response = await fetch(IREV_BASE + "/elections/" + encodeURIComponent(electionId) + path, {
-      headers: { "user-agent": "INEC-Result-Intelligence/1.0 source-collector", accept: "application/json, text/plain, */*", origin: "https://inecelectionresults.ng", referer: "https://inecelectionresults.ng/", "x-api-key": IREV_KEY, "x-api-rt": String(Date.now()) },
+      headers: { "user-agent": "INEC-Result-Intelligence/1.0 source-collector", accept: "application/json, text/plain, */*", origin: "https://inecelectionresults.ng", referer: "https://inecelectionresults.ng/", ...(IREV_KEY ? { "x-api-key": IREV_KEY } : {}), "x-api-rt": String(Date.now()) },
       signal: controller.signal,
     });
     if (!response.ok) throw new Error("IReV " + path + " HTTP " + response.status);
