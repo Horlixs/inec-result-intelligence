@@ -41,11 +41,8 @@ jobs:
         run: |
           base="https://dolphin-app-sleqh.ondigitalocean.app/api/v1"
           for path in \
-            "/lgas/5f0f39934d89fc3a883de23a" \
-            "/lga/5f0f39934d89fc3a883de23a" \
-            "/lgas/3481" \
-            "/lga/3481" \
-            "/states/20"; do
+            "/elections/6407cc8826d4fe6cc81cd835/lga" \
+            "/elections/6407ce3c26d4fe6cc81da699/lga"; do
             echo "=== $path ==="
             curl --silent --show-error --max-time 15 -w "\nHTTP=%{http_code}\n" "$base$path" | head -c 6000
             echo
