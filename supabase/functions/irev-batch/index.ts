@@ -116,7 +116,7 @@ async function queueCounts() { const [wards, sheets] = await Promise.all([supaba
 Deno.serve(async request => {
   if (request.method === "OPTIONS") return new Response(null, { status: 204, headers: CORS });
   if (request.method !== "POST") return json({ ok: false, error: "POST required" }, 405);
-  const started = Date.now(); let wardProcessed = 0; let wardFailed = 0; let sheetProcessed = 0; let sheetFailed = 0; let queued = 0;
+  const started = Date.now(); let wardProcessed = 0; let wardFailed = 0; let sheetProcessed = 0; let sheetFailed = 0; let queued = 0; const sheetDiagnostics: Array<Record<string, unknown>> = [];
   try {
     const wardDiagnostics: Array<Record<string, unknown>> = [];
     while (wardProcessed + wardFailed < MAX_WARD_JOBS && Date.now() - started < DEADLINE_MS) {
@@ -134,8 +134,8 @@ Deno.serve(async request => {
       }
     }
     if (Date.now() - started < DEADLINE_MS) queued = await enqueueSheets();
-    while (sheetProcessed + sheetFailed < MAX_SHEET_JOBS && Date.now() - started < DEADLINE_MS) { const job = await claimSheet(); if (!job) break; try { const result = await invokeProcess(String(job.result_sheet_id)); await finishSheet(job.job_id, Number(job.attempts), Boolean(result?.ok), result?.error); if (result?.ok) sheetProcessed++; else sheetFailed++; } catch (error) { sheetFailed++; await finishSheet(job.job_id, Number(job.attempts), false, error instanceof Error ? error.message : String(error)); } }
+    while (sheetProcessed + sheetFailed < MAX_SHEET_JOBS && Date.now() - started < DEADLINE_MS) { const job = await claimSheet(); if (!job) break; try { const result = await invokeProcess(String(job.result_sheet_id)); sheetDiagnostics.push({ job_id: job.job_id, result_sheet_id: job.result_sheet_id, ok: Boolean(result?.ok), status: result?.status ?? null, error: result?.error ?? null }); await finishSheet(job.job_id, Number(job.attempts), Boolean(result?.ok), result?.error); if (result?.ok) sheetProcessed++; else sheetFailed++; } catch (error) { const message = error instanceof Error ? error.message : String(error); sheetDiagnostics.push({ job_id: job.job_id, result_sheet_id: job.result_sheet_id, ok: false, error: message }); sheetFailed++; await finishSheet(job.job_id, Number(job.attempts), false, message); } }
     const remaining = await queueCounts();
-    return json({ ok: true, queued, processed: sheetProcessed, failed: sheetFailed, ward_jobs: { processed: wardProcessed, failed: wardFailed }, ward_diagnostics: wardDiagnostics, remaining: remaining.total, remaining_ward_jobs: remaining.ward_jobs, remaining_sheet_jobs: remaining.sheet_jobs, max_ward_jobs: MAX_WARD_JOBS, max_sheet_jobs: MAX_SHEET_JOBS, elapsed_ms: Date.now() - started });
+    return json({ ok: true, queued, processed: sheetProcessed, failed: sheetFailed, ward_jobs: { processed: wardProcessed, failed: wardFailed }, ward_diagnostics: wardDiagnostics, sheet_diagnostics: sheetDiagnostics, remaining: remaining.total, remaining_ward_jobs: remaining.ward_jobs, remaining_sheet_jobs: remaining.sheet_jobs, max_ward_jobs: MAX_WARD_JOBS, max_sheet_jobs: MAX_SHEET_JOBS, elapsed_ms: Date.now() - started });
   } catch (error) { return json({ ok: false, error: error instanceof Error ? error.message : String(error), ward_jobs: { processed: wardProcessed, failed: wardFailed }, processed: sheetProcessed, failed: sheetFailed }, 500); }
 });
