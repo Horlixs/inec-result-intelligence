@@ -7,7 +7,7 @@ const IREV_BASE = "https://dolphin-app-sleqh.ondigitalocean.app/api/v1";
 const IREV_KEY = Deno.env.get("IREV_KEY")?.trim() || null;
 const MAX_WARD_JOBS = 1;
 const MAX_SHEET_JOBS = 3;
-const MAX_ATTEMPTS = 5;
+const MAX_ATTEMPTS = 3;
 const DEADLINE_MS = 110_000;
 const WORKER_ID = `irev-batch:${crypto.randomUUID()}`;
 const CORS = { "Access-Control-Allow-Origin": "https://inec-result-intelligence.vercel.app", "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type", "Access-Control-Allow-Methods": "POST, OPTIONS", "Access-Control-Max-Age": "86400" };
@@ -124,11 +124,37 @@ async function finishSheet(jobId: string, attempts: number, ok: boolean, error?:
 }
 
 async function queueCounts() { const [wards, sheets] = await Promise.all([supabase.from("irev_ward_sync_jobs").select("id", { count: "exact", head: true }).in("status", ["queued", "processing"]), supabase.from("result_processing_jobs").select("id", { count: "exact", head: true }).in("status", ["queued", "processing"])]); if (wards.error) throw wards.error; if (sheets.error) throw sheets.error; return { ward_jobs: wards.count ?? 0, sheet_jobs: sheets.count ?? 0, total: (wards.count ?? 0) + (sheets.count ?? 0) }; }
+async function updateHeartbeat(values: Record<string, unknown>) {
+  const { error } = await supabase.from("pipeline_worker_status").upsert({
+    id: "irev-ocr-drain",
+    worker_name: "IReV OCR Drain",
+    heartbeat_at: new Date().toISOString(),
+    updated_at: new Date().toISOString(),
+    ...values,
+  }, { onConflict: "id" });
+  if (error) console.error("worker heartbeat update failed:", error.message);
+}
+async function refreshHeartbeat(extra: Record<string, unknown> = {}) {
+  try {
+    const counts = await queueCounts();
+    await updateHeartbeat({
+      queue_remaining: counts.total,
+      active_jobs: counts.sheet_jobs,
+      ...extra,
+    });
+    return counts;
+  } catch (error) {
+    console.error("worker heartbeat refresh failed:", error instanceof Error ? error.message : String(error));
+    return null;
+  }
+}
 Deno.serve(async request => {
   if (request.method === "OPTIONS") return new Response(null, { status: 204, headers: CORS });
   if (request.method !== "POST") return json({ ok: false, error: "POST required" }, 405);
-  const started = Date.now(); let wardProcessed = 0; let wardFailed = 0; let sheetProcessed = 0; let sheetFailed = 0; let queued = 0; const sheetDiagnostics: Array<Record<string, unknown>> = [];
+  const started = Date.now(); const runId = WORKER_ID; let wardProcessed = 0; let wardFailed = 0; let sheetProcessed = 0; let sheetFailed = 0; let queued = 0; const sheetDiagnostics: Array<Record<string, unknown>> = [];
   try {
+    await updateHeartbeat({ status: "running", run_id: runId, last_worker_started: new Date().toISOString(), last_error: null, jobs_processed_last_run: 0, jobs_failed_last_run: 0 });
+    await refreshHeartbeat();
     const wardDiagnostics: Array<Record<string, unknown>> = [];
     while (wardProcessed + wardFailed < MAX_WARD_JOBS && Date.now() - started < DEADLINE_MS) {
       const job = await claimWard();
@@ -146,29 +172,64 @@ Deno.serve(async request => {
     }
     if (Date.now() - started < DEADLINE_MS) queued = await enqueueSheets();
     let rateLimited = false;
+    // Claim and process up to three sheets concurrently. The next batch is not
+    // claimed until every job in the current batch has settled.
     while (sheetProcessed + sheetFailed < MAX_SHEET_JOBS && Date.now() - started < DEADLINE_MS) {
-      const job = await claimSheet();
-      if (!job) break;
-      try {
-        const result = await invokeProcess(String(job.result_sheet_id));
-        sheetDiagnostics.push({ job_id: job.job_id, result_sheet_id: job.result_sheet_id, ok: Boolean(result?.ok), status: result?.status ?? null, error: result?.error ?? null });
-        await finishSheet(job.job_id, Number(job.attempts), Boolean(result?.ok), result?.error);
-        if (result?.ok) sheetProcessed++;
-        else sheetFailed++;
-      } catch (error) {
-        const message = error instanceof Error ? error.message : String(error);
-        const isRateLimited = /HTTP 429|RESOURCE_EXHAUSTED|quota exceeded|rate limit/i.test(message);
-        sheetDiagnostics.push({ job_id: job.job_id, result_sheet_id: job.result_sheet_id, ok: false, deferred: isRateLimited, error: message });
-        if (isRateLimited) {
-          await finishSheet(job.job_id, Number(job.attempts), false, message, true);
-          rateLimited = true;
-          break;
+      const claimCount = Math.min(MAX_SHEET_JOBS - sheetProcessed - sheetFailed, 3);
+      const claimed = (await Promise.all(Array.from({ length: claimCount }, () => claimSheet()))).filter(Boolean) as Array<Record<string, unknown>>;
+      if (!claimed.length) break;
+
+      const outcomes = await Promise.allSettled(claimed.map(async (job) => {
+        try {
+          const result = await invokeProcess(String(job.result_sheet_id));
+          await finishSheet(job.job_id as string, Number(job.attempts), Boolean(result?.ok), result?.error);
+          return { job, ok: Boolean(result?.ok), status: result?.status ?? null, error: result?.error ?? null, rateLimited: false };
+        } catch (error) {
+          const message = error instanceof Error ? error.message : String(error);
+          const isRateLimited = /HTTP 429|RESOURCE_EXHAUSTED|quota exceeded|rate limit/i.test(message);
+          await finishSheet(job.job_id as string, Number(job.attempts), false, message, isRateLimited);
+          return { job, ok: false, status: null, error: message, rateLimited: isRateLimited };
         }
-        sheetFailed++;
-        await finishSheet(job.job_id, Number(job.attempts), false, message);
+      }));
+
+      for (const outcome of outcomes) {
+        if (outcome.status === "fulfilled") {
+          const value = outcome.value;
+          sheetDiagnostics.push({ job_id: value.job.job_id, result_sheet_id: value.job.result_sheet_id, ok: value.ok, status: value.status, deferred: value.rateLimited, error: value.error });
+          if (value.ok) sheetProcessed++; else if (value.rateLimited) rateLimited = true; else sheetFailed++;
+        } else {
+          sheetFailed++;
+          sheetDiagnostics.push({ ok: false, error: outcome.reason instanceof Error ? outcome.reason.message : String(outcome.reason) });
+        }
       }
+
+      await refreshHeartbeat({
+        jobs_processed_last_run: sheetProcessed,
+        jobs_failed_last_run: sheetFailed,
+      });
+
+      if (rateLimited) break;
+      if (claimed.length < claimCount) break;
     }
-    const remaining = await queueCounts();
-    return json({ ok: true, queued, processed: sheetProcessed, failed: sheetFailed, ward_jobs: { processed: wardProcessed, failed: wardFailed }, ward_diagnostics: wardDiagnostics, sheet_diagnostics: sheetDiagnostics, remaining: remaining.total, remaining_ward_jobs: remaining.ward_jobs, remaining_sheet_jobs: remaining.sheet_jobs, max_ward_jobs: MAX_WARD_JOBS, max_sheet_jobs: MAX_SHEET_JOBS, rate_limited: rateLimited, elapsed_ms: Date.now() - started });
-  } catch (error) { return json({ ok: false, error: error instanceof Error ? error.message : String(error), ward_jobs: { processed: wardProcessed, failed: wardFailed }, processed: sheetProcessed, failed: sheetFailed }, 500); }
+    const remaining = await refreshHeartbeat({
+      status: "idle",
+      last_worker_finished: new Date().toISOString(),
+      last_successful_batch: (sheetProcessed > 0 && sheetFailed === 0) ? new Date().toISOString() : undefined,
+      jobs_processed_last_run: sheetProcessed,
+      jobs_failed_last_run: sheetFailed,
+      last_error: sheetFailed > 0 ? (sheetDiagnostics.find(x => x.error)?.error as string ?? null) : null,
+    }) ?? { total: 0, ward_jobs: 0, sheet_jobs: 0 };
+    return json({ ok: true, run_id: runId, queued, processed: sheetProcessed, failed: sheetFailed, ward_jobs: { processed: wardProcessed, failed: wardFailed }, ward_diagnostics: wardDiagnostics, sheet_diagnostics: sheetDiagnostics, remaining: remaining.total, remaining_ward_jobs: remaining.ward_jobs, remaining_sheet_jobs: remaining.sheet_jobs, max_ward_jobs: MAX_WARD_JOBS, max_sheet_jobs: MAX_SHEET_JOBS, concurrent_sheet_jobs: 3, rate_limited: rateLimited, elapsed_ms: Date.now() - started });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    await updateHeartbeat({
+      status: "error",
+      heartbeat_at: new Date().toISOString(),
+      last_worker_finished: new Date().toISOString(),
+      last_error: message.slice(0, 2000),
+      jobs_processed_last_run: sheetProcessed,
+      jobs_failed_last_run: sheetFailed,
+    });
+    return json({ ok: false, run_id: runId, error: message, ward_jobs: { processed: wardProcessed, failed: wardFailed }, processed: sheetProcessed, failed: sheetFailed }, 500);
+  }
 });
