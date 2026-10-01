@@ -46,3 +46,5 @@ jobs:
           print("LATEST_ENTRIES:",json.dumps(data.get("latest_entries",[])[:10],separators=(",",":")))
           print("LATEST_CHECKS:",json.dumps(data.get("latest_checks",[])[:10],separators=(",",":")))
           PY
+
+# verification trigger checkpoint
