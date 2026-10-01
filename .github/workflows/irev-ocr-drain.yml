@@ -2,14 +2,11 @@ name: IReV OCR Drain
 
 on:
   schedule:
-    - cron: "7,17,27,37,47,57 * * * *"
+    - cron: "7 * * * *"
   workflow_dispatch:
   push:
     paths:
       - ".github/workflows/irev-ocr-drain.yml"
-  workflow_run:
-    workflows: ["Deploy Supabase Edge Functions"]
-    types: [completed]
 
 concurrency:
   group: irev-ocr-drain
@@ -20,7 +17,6 @@ permissions:
 
 jobs:
   drain:
-    if: github.event_name != 'workflow_run' || github.event.workflow_run.conclusion == 'success'
     runs-on: ubuntu-slim
     timeout-minutes: 10
     steps:
