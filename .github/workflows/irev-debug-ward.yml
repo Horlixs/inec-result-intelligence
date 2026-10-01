@@ -37,3 +37,16 @@ jobs:
             -H "apikey: $SUPABASE_ANON_KEY" \
             -H "Content-Type: application/json" \
             -d '{"election_id":"6aae6541d0998b3b55a9af98","ward_oid":"5f0f3aee8f77bb3acad09266"}'
+      - name: Probe IReV geography detail endpoints
+        run: |
+          base="https://dolphin-app-sleqh.ondigitalocean.app/api/v1"
+          for path in \
+            "/lgas/5f0f39934d89fc3a883de23a" \
+            "/lga/5f0f39934d89fc3a883de23a" \
+            "/lgas/3481" \
+            "/lga/3481" \
+            "/states/20"; do
+            echo "=== $path ==="
+            curl --silent --show-error --max-time 15 -w "\nHTTP=%{http_code}\n" "$base$path" | head -c 6000
+            echo
+          done
