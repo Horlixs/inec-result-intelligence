@@ -6,7 +6,7 @@ const supabase = createClient(
 );
 
 const geminiKey = Deno.env.get("GOOGLE_GENERATIVE_AI_API_KEY");
-const ORIGIN = "https://inecelectionresults.ng";
+const ORIGIN = "https://inecelectionresults.ng"; // deployment secret sync checkpoint
 const UA = "INEC-Result-Intelligence/1.0 evidence-collector";
 const MAX_EVIDENCE_BYTES = 20 * 1024 * 1024;
 
