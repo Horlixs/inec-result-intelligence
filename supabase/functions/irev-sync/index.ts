@@ -407,10 +407,10 @@ async function discoverApiWardStructure(
     .normalize("NFKD")
     .replace(/[\\u0300-\\u036f]/g, "")
     .toUpperCase()
-    .replace(/\\b(LGA|LOCAL GOVERNMENT AREA|WARD|REGISTRATION AREA|RA)\\b/g, "")
+    .replace(/\b(LGA|LOCAL GOVERNMENT AREA|WARD|REGISTRATION AREA|RA)\b/g, "")
     .replace(/[^A-Z0-9]+/g, " ")
     .trim()
-    .replace(/\\s+/g, " ");
+    .replace(/\s+/g, " ");
   const numericIdentity = (value: unknown): number | null => {
     const parsed = Number(value);
     return Number.isInteger(parsed) && parsed > 0 ? parsed : null;
