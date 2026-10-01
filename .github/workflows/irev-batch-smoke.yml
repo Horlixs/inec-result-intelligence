@@ -7,10 +7,10 @@ on:
       - ".github/workflows/irev-batch-smoke.yml"
 
 jobs:
-  inspect:
+  smoke:
     runs-on: ubuntu-latest
     steps:
-      - name: Inspect processing state
+      - name: Invoke IReV batch
         env:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_ANON_KEY: ${{ secrets.SUPABASE_ANON_KEY }}
@@ -18,6 +18,8 @@ jobs:
           test -n "$SUPABASE_URL"
           test -n "$SUPABASE_ANON_KEY"
           curl --fail-with-body --silent --show-error \
-            "$SUPABASE_URL/rest/v1/result_processing_jobs?select=id,result_sheet_id,status,attempts,last_error,updated_at&order=updated_at.desc&limit=10" \
+            -X POST "$SUPABASE_URL/functions/v1/irev-batch" \
+            -H "Authorization: Bearer $SUPABASE_ANON_KEY" \
             -H "apikey: $SUPABASE_ANON_KEY" \
-            -H "Authorization: Bearer $SUPABASE_ANON_KEY"
+            -H "Content-Type: application/json" \
+            -d '{"trigger":"diagnostic"}'
