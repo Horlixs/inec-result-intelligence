@@ -242,7 +242,10 @@ async function processWardJob(job: Record<string, unknown>) {
       url,
     );
 
-    const result = await supabase.from("result_sheets").upsert({
+    // Discovery is idempotent. Existing sheets must retain their terminal
+    // processing state (verified/pending_review/failed) and must never be
+    // reset to "discovered" merely because the hourly sync sees them again.
+    const result = await supabase.from("result_sheets").insert({
       election_id: electionId,
       polling_unit_id: pollingUnitId,
       source_url: url,
@@ -251,7 +254,7 @@ async function processWardJob(job: Record<string, unknown>) {
       evidence_status: "remote_only",
       storage_policy: "ephemeral",
       discovered_at: new Date().toISOString(),
-    }, { onConflict: "election_id,source_url" });
+    }, { ignoreDuplicates: true });
 
     if (result.error) throw result.error;
     sheets++;
