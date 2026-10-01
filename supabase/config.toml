@@ -12,3 +12,6 @@ verify_jwt = false
 
 [functions.irev-batch]
 verify_jwt = true
+
+[functions.irev-diagnose-ward]
+verify_jwt = true
