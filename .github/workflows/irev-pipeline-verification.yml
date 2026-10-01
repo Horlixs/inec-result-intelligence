@@ -50,3 +50,5 @@ jobs:
 # verification trigger checkpoint
 
 # post-refresh diagnostic checkpoint
+
+# queue-state checkpoint
