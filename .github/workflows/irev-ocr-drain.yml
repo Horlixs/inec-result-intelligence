@@ -2,7 +2,7 @@ name: IReV OCR Drain
 
 on:
   schedule:
-    # Backup remote worker. The IReV Refresh workflow also triggers this
+    # Backup worker. The IReV Refresh workflow also triggers this
     # workflow after each scheduled refresh, so OCR does not depend on a
     # second independent GitHub scheduler.
     - cron: "*/5 * * * *"
