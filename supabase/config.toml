@@ -1,5 +1,5 @@
 [functions.irev-cron]
-verify_jwt = false
+verify_jwt = true
 
 [functions.irev-refresh]
 verify_jwt = true
