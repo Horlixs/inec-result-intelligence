@@ -751,7 +751,8 @@ Deno.serve(async request => {
             : [];
         const sheetRows = resultLinks.map(url => ({ election_id: electionId, source_url: url, source_external_id: url, status: "discovered", evidence_status: "remote_only", storage_policy: "ephemeral" }));
         if (sheetRows.length) {
-          const result = await supabaseRest("result_sheets?on_conflict=election_id,source_url", { method: "POST", headers: { Prefer: "resolution=merge-duplicates,return=minimal" }, body: JSON.stringify(sheetRows) });
+          // Discovery must never overwrite an existing result's processing state.
+          const result = await supabaseRest("result_sheets?on_conflict=election_id,source_url", { method: "POST", headers: { Prefer: "resolution=ignore-duplicates,return=minimal" }, body: JSON.stringify(sheetRows) });
           const error = supabaseError("result_sheets upsert", result);
           if (error) throw error;
           resultSheetsDiscovered += sheetRows.length;
