@@ -158,7 +158,7 @@ async function discoverFromIrevApi() {
           accept: "application/json, text/plain, */*",
           origin: ORIGIN,
           referer: ORIGIN + "/",
-          "x-api-key": IREV_KEY,
+          ...(IREV_KEY ? { "x-api-key": IREV_KEY } : {}),
           "x-api-rt": String(Date.now()),
         },
       });
@@ -250,7 +250,7 @@ async function apiGet(base: string, path: string, diagnostics?: Array<Record<str
         accept: "application/json, text/plain, */*",
         origin: ORIGIN,
         referer: ORIGIN + "/",
-        "x-api-key": IREV_KEY,
+        ...(IREV_KEY ? { "x-api-key": IREV_KEY } : {}),
         "x-api-rt": String(Date.now()),
       },
       signal: controller.signal,
