@@ -39,3 +39,5 @@ jobs:
         run: npm install
       - name: TypeScript and Vite build
         run: npm run build
+
+# Build diagnostics v3
