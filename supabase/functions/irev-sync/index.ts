@@ -302,6 +302,51 @@ function objectId(value: unknown): string | null {
   return id && /^[a-f0-9]{24}$/i.test(id) ? id : null;
 }
 
+async function enqueueElectionSyncJobs(): Promise<number> {
+  const result = await supabaseRest("rpc/enqueue_irev_election_sync_jobs", {
+    method: "POST",
+    body: "{}",
+  });
+  const error = supabaseError("election sync queue enqueue", result);
+  if (error) throw error;
+  const value = Number(result.body);
+  return Number.isFinite(value) ? value : 0;
+}
+
+async function claimElectionSyncJobs(limit: number): Promise<Array<Record<string, unknown>>> {
+  const result = await supabaseRest("rpc/claim_irev_election_sync_jobs", {
+    method: "POST",
+    body: JSON.stringify({
+      p_worker_id: "irev-sync:" + crypto.randomUUID(),
+      p_limit: limit,
+      p_max_attempts: 5,
+    }),
+  });
+  const error = supabaseError("election sync queue claim", result);
+  if (error) throw error;
+  return Array.isArray(result.body)
+    ? result.body.filter((row): row is Record<string, unknown> => !!row && typeof row === "object")
+    : [];
+}
+
+async function finishElectionSyncJob(
+  jobId: string,
+  success: boolean,
+  errorMessage?: string,
+): Promise<void> {
+  const result = await supabaseRest("rpc/finish_irev_election_sync_job", {
+    method: "POST",
+    body: JSON.stringify({
+      p_job_id: jobId,
+      p_success: success,
+      p_error: errorMessage ?? null,
+      p_refresh_minutes: 60,
+    }),
+  });
+  const error = supabaseError("election sync queue finish", result);
+  if (error) throw error;
+}
+
 function documentUrl(row: Record<string, unknown>): string | null {
   const candidates = [
     row.document,
@@ -671,69 +716,110 @@ Deno.serve(async request => {
     }
 
     const elections = [...discovered.values()];
-    const electionsToProcess = [...elections]
-      .sort((a, b) => {
-        const aTime = a.election_date ? Date.parse(a.election_date) : 0;
-        const bTime = b.election_date ? Date.parse(b.election_date) : 0;
-        return bTime - aTime;
-      })
-      .slice(0, MAX_ELECTIONS_PER_SYNC);
     stage = "upsert_elections";
     if (elections.length) {
-      const result = await supabaseRest("elections?on_conflict=external_id", { method: "POST", headers: { Prefer: "resolution=merge-duplicates,return=minimal" }, body: JSON.stringify(elections) });
+      const result = await supabaseRest("elections?on_conflict=external_id", {
+        method: "POST",
+        headers: { Prefer: "resolution=merge-duplicates,return=minimal" },
+        body: JSON.stringify(elections),
+      });
       const error = supabaseError("elections upsert", result);
       if (error) throw error;
     }
 
-    let resultSheetsDiscovered = 0;
-    const electionStats: Array<Record<string, unknown>> = [];
-    for (const election of electionsToProcess) {
-      try {
-        stage = `process_election:${election.external_id}`;
-        const lookup = await supabaseRest(`elections?select=id&external_id=eq.${encodeURIComponent(election.external_id)}&limit=1`, { method: "GET" });
-        const lookupError = supabaseError("election lookup", lookup);
-        if (lookupError) throw lookupError;
-        const rows = Array.isArray(lookup.body) ? lookup.body as Array<Record<string, unknown>> : [];
-        const electionId = rows[0]?.id;
-        if (!electionId) { electionStats.push({ external_id: election.external_id, error: "saved election id not found" }); continue; }
+    // Discovery and hierarchy processing are deliberately separate. Every discovered
+    // IReV election gets a durable queue row; bounded workers then advance through that
+    // queue instead of repeatedly processing the same three newest elections forever.
+    stage = "enqueue_election_sync_jobs";
+    const enqueuedElectionJobs = await enqueueElectionSyncJobs();
+    stage = "claim_election_sync_jobs";
+    const electionJobs = await claimElectionSyncJobs(MAX_ELECTIONS_PER_SYNC);
 
+    let resultSheetsDiscovered = 0;
+    let electionJobsProcessed = 0;
+    let electionJobsFailed = 0;
+    const electionStats: Array<Record<string, unknown>> = [];
+
+    for (const job of electionJobs) {
+      const jobId = String(job.job_id ?? "");
+      const electionId = String(job.election_id ?? "");
+      let jobSucceeded = false;
+
+      try {
+        const lookup = await supabaseRest(
+          "elections?select=id,external_id,name,election_type,election_date,source_url,status&" +
+          "id=eq." + encodeURIComponent(electionId) + "&limit=1",
+          { method: "GET" },
+        );
+        const lookupError = supabaseError("queued election lookup", lookup);
+        if (lookupError) throw lookupError;
+
+        const savedRows = Array.isArray(lookup.body)
+          ? lookup.body as Array<Record<string, unknown>>
+          : [];
+        const saved = savedRows[0];
+        const externalId = String(saved?.external_id ?? "").trim();
+        if (!saved || !externalId) throw new Error("Queued election identity unavailable");
+
+        const discoveredElection = discovered.get(externalId);
+        const election = discoveredElection ?? ({
+          external_id: externalId,
+          name: String(saved.name ?? externalId),
+          election_type: String(saved.election_type ?? "other"),
+          election_date: saved.election_date ? String(saved.election_date) : null,
+          source_url: String(saved.source_url ?? ORIGIN + "/elections/" + externalId.replace(/^irev:/, "")),
+          status: String(saved.status ?? "discovered"),
+        } as ReturnType<typeof discoverFromHtml>[number]);
+
+        stage = "process_election:" + externalId;
         let queuedWardJobs = 0;
-        if (election.external_id.startsWith("irev:")) {
-          const apiElectionId = election.external_id.slice("irev:".length);
-          const electionStateId = Number((election as unknown as Record<string, unknown>).irev_state_id);
-          const stateIdFromApi = Number.isFinite(electionStateId) && electionStateId >= 1 && electionStateId <= 37
-            ? electionStateId
-            : null;
-          const stateIdMatch = election.name.match(/(?:^|[-\\s])(\\d{2})[-\\s]/);
-          const stateIdFromName = stateIdMatch ? Number(stateIdMatch[1]) : null;
-          const parsedStateId = stateIdFromName && stateIdFromName >= 1 && stateIdFromName <= 37 ? stateIdFromName : null;
-          const candidateStateIds = stateIdFromApi
+
+        if (externalId.startsWith("irev:")) {
+          const apiElectionId = externalId.slice("irev:".length);
+          const electionStateId = Number(
+            (election as unknown as Record<string, unknown>).irev_state_id,
+          );
+          const stateIdFromApi =
+            Number.isFinite(electionStateId) && electionStateId >= 1 && electionStateId <= 37
+              ? electionStateId
+              : null;
+          const stateIdFromName = election.name.match(/(?:^|[-\\s])(\\d{2})[-\\s]/);
+          const parsedStateId = stateIdFromName ? Number(stateIdFromName[1]) : null;
+          const validParsedStateId =
+            parsedStateId && parsedStateId >= 1 && parsedStateId <= 37
+              ? parsedStateId
+              : null;
+
+          let candidateStateIds = stateIdFromApi
             ? [stateIdFromApi]
-            : parsedStateId
-              ? [parsedStateId]
+            : validParsedStateId
+              ? [validParsedStateId]
               : [...KNOWN_STATE_IDS];
 
-          if (!stateIdFromApi && !parsedStateId) {
+          if (!stateIdFromApi && !validParsedStateId) {
             for (const base of API_BASES) {
-              const detail = await apiGet(base, "/elections/" + encodeURIComponent(apiElectionId), geographyDiagnostics);
+              const detail = await apiGet(
+                base,
+                "/elections/" + encodeURIComponent(apiElectionId),
+                geographyDiagnostics,
+              );
               const detailStateId = apiStateId(detail);
               if (detailStateId) {
-                candidateStateIds.splice(0, candidateStateIds.length, detailStateId);
+                candidateStateIds = [detailStateId];
                 break;
               }
             }
           }
 
-          // The election-level /lga endpoint already returns the full hierarchy.
-          // Calling it once is important: the previous implementation issued the
-          // same expensive request once per candidate state, which amplified CPU
-          // and memory usage inside the Edge Function.
-          const fallbackStateId = stateIdFromApi ?? parsedStateId ?? 1;
+          // The election-level /lga endpoint is authoritative and should be requested
+          // once per election. The state candidates above only provide a fallback
+          // numeric identity when the API response itself does not expose it.
+          const fallbackStateId = candidateStateIds[0] ?? 1;
           for (const base of API_BASES) {
             queuedWardJobs = await discoverApiWardStructure(
               base,
               apiElectionId,
-              String(electionId),
+              electionId,
               fallbackStateId,
               geographyDiagnostics,
             );
@@ -741,25 +827,63 @@ Deno.serve(async request => {
           }
         }
 
-        // IReV elections are API-backed. Do not fall back to crawling the SPA
-        // when hierarchy discovery returns zero; that crawl can consume hundreds
-        // of HTML requests and exhaust the Edge Function resource budget.
-        const resultLinks = election.external_id.startsWith("irev:")
+        const resultLinks = externalId.startsWith("irev:")
           ? []
           : queuedWardJobs === 0
             ? await crawlElection(election.source_url)
             : [];
-        const sheetRows = resultLinks.map(url => ({ election_id: electionId, source_url: url, source_external_id: url, status: "discovered", evidence_status: "remote_only", storage_policy: "ephemeral" }));
+
+        const sheetRows = resultLinks.map((sourceUrl) => ({
+          election_id: electionId,
+          source_url: sourceUrl,
+          source_external_id: sourceUrl,
+          status: "discovered",
+          evidence_status: "remote_only",
+          storage_policy: "ephemeral",
+        }));
+
         if (sheetRows.length) {
-          // Discovery must never overwrite an existing result's processing state.
-          const result = await supabaseRest("result_sheets?on_conflict=election_id,source_url", { method: "POST", headers: { Prefer: "resolution=ignore-duplicates,return=minimal" }, body: JSON.stringify(sheetRows) });
-          const error = supabaseError("result_sheets upsert", result);
+          const result = await supabaseRest(
+            "result_sheets?on_conflict=election_id,source_url",
+            {
+              method: "POST",
+              headers: {
+                Prefer: "resolution=ignore-duplicates,return=minimal",
+              },
+              body: JSON.stringify(sheetRows),
+            },
+          );
+          const error = supabaseError("result sheets upsert", result);
           if (error) throw error;
           resultSheetsDiscovered += sheetRows.length;
         }
-        electionStats.push({ external_id: election.external_id, result_links: resultLinks.length, queued_ward_jobs: queuedWardJobs });
+
+        await finishElectionSyncJob(jobId, true);
+        jobSucceeded = true;
+        electionJobsProcessed++;
+        electionStats.push({
+          external_id: externalId,
+          result_links: resultLinks.length,
+          queued_ward_jobs: queuedWardJobs,
+          queue_job_id: jobId,
+        });
       } catch (error) {
-        electionStats.push({ external_id: election.external_id, error: error instanceof Error ? error.message : String(error) });
+        electionJobsFailed++;
+        const message = error instanceof Error ? error.message : String(error);
+        electionStats.push({
+          external_id: jobId || electionId,
+          queue_job_id: jobId,
+          error: message,
+        });
+        if (jobId) {
+          await finishElectionSyncJob(jobId, false, message);
+        }
+      }
+
+      if (!jobSucceeded) {
+        // Continue with the next independent election rather than turning one bad
+        // geography response into a failed discovery run for every election.
+        continue;
       }
     }
 
@@ -768,7 +892,10 @@ Deno.serve(async request => {
         max_elections_per_sync: MAX_ELECTIONS_PER_SYNC,
         max_directory_pages: MAX_DIRECTORY_PAGES,
         max_crawl_pages: MAX_CRAWL_PAGES,
-        processed_elections: electionsToProcess.length,
+        processed_elections: electionJobs.length,
+        successful_election_jobs: electionJobsProcessed,
+        failed_election_jobs: electionJobsFailed,
+        election_jobs_enqueued: enqueuedElectionJobs,
         result_sheets_discovered: resultSheetsDiscovered,
         elections: electionStats, hierarchy: "IReV API with durable ward queue", homepage: homepageDiagnostics, scanned_directory_pages: scannedDirectoryPages, api_discovery_attempts: apiDiscovery.attempts, geography_diagnostics: geographyDiagnostics.slice(-60) } }) });
     const pipelineError = supabaseError("pipeline_runs insert", pipeline);
