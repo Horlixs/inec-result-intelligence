@@ -313,12 +313,22 @@ async function processWardJob(job: Record<string, unknown>) {
         .eq("id", fallbackSheet.id);
       if (updateError) throw updateError;
 
-      await supabase
+      const { error: resetJobError } = await supabase
         .from("result_processing_jobs")
-        .upsert(
-          { result_sheet_id: fallbackSheet.id, status: "queued", attempts: 0, available_at: new Date().toISOString() },
-          { onConflict: "result_sheet_id", ignoreDuplicates: true },
-        );
+        .delete()
+        .eq("result_sheet_id", fallbackSheet.id);
+      if (resetJobError) throw resetJobError;
+
+      const { error: queueJobError } = await supabase
+        .from("result_processing_jobs")
+        .insert({
+          result_sheet_id: fallbackSheet.id,
+          status: "queued",
+          attempts: 0,
+          available_at: new Date().toISOString(),
+        });
+      if (queueJobError) throw queueJobError;
+
       sheets++;
       continue;
     }
