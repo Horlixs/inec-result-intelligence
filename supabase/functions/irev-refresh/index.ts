@@ -216,15 +216,66 @@ async function processWardJob(job: Record<string, unknown>) {
     }
 
     const url = getDocumentUrl(row, irevElectionId);
-    if (!url) continue;
+
+    // A polling-unit record without a document is a valid IReV state, not an
+    // OCR failure. Do not manufacture a /document SPA URL: that URL is only a
+    // client route and is not evidence. If a fallback row was created by an
+    // older sync, retire it so it cannot keep generating failed OCR jobs.
+    const fallbackUrl = puExternalId
+      ? "https://inecelectionresults.ng/elections/" +
+        encodeURIComponent(irevElectionId) +
+        "/pu/" +
+        encodeURIComponent(puExternalId) +
+        "/document"
+      : null;
+
+    const existing = await supabase
+      .from("result_sheets")
+      .select("id,status,source_url")
+      .eq("election_id", electionId)
+      .eq("polling_unit_id", pollingUnitId)
+      .order("discovered_at", { ascending: false })
+      .limit(20);
+
+    if (existing.error) throw existing.error;
+
+    if (!url) {
+      const fallbackIds = (existing.data ?? [])
+        .filter(sheet => fallbackUrl && sheet.source_url === fallbackUrl)
+        .map(sheet => sheet.id);
+
+      if (fallbackIds.length) {
+        const { error: retireError } = await supabase
+          .from("result_sheets")
+          .update({
+            status: "skipped",
+            last_error: "IReV polling-unit record has no document asset",
+            evidence_status: "remote_only",
+            updated_at: new Date().toISOString(),
+          })
+          .in("id", fallbackIds);
+        if (retireError) throw retireError;
+
+        const { error: jobError } = await supabase
+          .from("result_processing_jobs")
+          .delete()
+          .in("result_sheet_id", fallbackIds);
+        if (jobError) throw jobError;
+      }
+
+      continue;
+    }
 
     rowsWithDocuments++;
-    if (
-      !row.document && !row.url && !row.file_url &&
-      !(nestedPu && (nestedPu.document || nestedPu.url || nestedPu.file_url))
-    ) {
-      constructedDocuments++;
-    }
+
+    const hasDirectDocument =
+      !!row.document ||
+      !!row.url ||
+      !!row.file_url ||
+      !!row.document_url ||
+      !!(nestedPu && (nestedPu.document || nestedPu.url || nestedPu.file_url || nestedPu.document_url));
+
+    if (!hasDirectDocument) constructedDocuments++;
 
     const document =
       row.document && typeof row.document === "object"
@@ -241,9 +292,40 @@ async function processWardJob(job: Record<string, unknown>) {
       url,
     );
 
+    const fallbackSheet = fallbackUrl
+      ? (existing.data ?? []).find(sheet => sheet.source_url === fallbackUrl)
+      : null;
+
+    if (fallbackSheet) {
+      const { error: updateError } = await supabase
+        .from("result_sheets")
+        .update({
+          source_url: url,
+          source_external_id: sourceExternalId,
+          status: "discovered",
+          evidence_status: "remote_only",
+          storage_policy: "ephemeral",
+          discovered_at: new Date().toISOString(),
+          last_error: null,
+          processing_attempts: 0,
+          processed_at: null,
+        })
+        .eq("id", fallbackSheet.id);
+      if (updateError) throw updateError;
+
+      await supabase
+        .from("result_processing_jobs")
+        .upsert(
+          { result_sheet_id: fallbackSheet.id, status: "queued", attempts: 0, available_at: new Date().toISOString() },
+          { onConflict: "result_sheet_id", ignoreDuplicates: true },
+        );
+      sheets++;
+      continue;
+    }
+
     // Discovery is idempotent. Existing sheets must retain their terminal
     // processing state (verified/pending_review/failed) and must never be
-    // reset to "discovered" merely because the hourly sync sees them again.
+    // reset to "discovered" merely because the sync sees them again.
     const result = await supabase.from("result_sheets").insert({
       election_id: electionId,
       polling_unit_id: pollingUnitId,
