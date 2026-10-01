@@ -3,7 +3,8 @@ name: IReV Ward API Diagnostic
 on:
   push:
     paths:
-      - "scripts/irev-debug-ward.mjs"
+      - "supabase/functions/irev-diagnose-ward/**"
+      - "supabase/config.toml"
       - ".github/workflows/irev-debug-ward.yml"
   workflow_dispatch:
 
@@ -12,14 +13,19 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     env:
-      IREV_API_KEY: ${{ secrets.IREV_API_KEY }}
+      SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+      SUPABASE_ANON_KEY: ${{ secrets.SUPABASE_ANON_KEY }}
     steps:
       - uses: actions/checkout@v4
-      - name: Verify IReV diagnostic credential is configured
+      - name: Verify Supabase diagnostic credentials are configured
         run: |
-          if [ -z "$IREV_API_KEY" ]; then
-            echo "::error::GitHub Secret IREV_API_KEY is not configured."
-            exit 1
-          fi
-      - name: Inspect IReV LGA hierarchy and resolved ward response
-        run: node scripts/irev-debug-ward.mjs
+          test -n "$SUPABASE_URL"
+          test -n "$SUPABASE_ANON_KEY"
+      - name: Run server-side IReV diagnostic
+        run: |
+          curl --fail-with-body --silent --show-error \
+            -X POST "$SUPABASE_URL/functions/v1/irev-diagnose-ward" \
+            -H "Authorization: Bearer $SUPABASE_ANON_KEY" \
+            -H "apikey: $SUPABASE_ANON_KEY" \
+            -H "Content-Type: application/json" \
+            -d '{"election_id":"6aae6541d0998b3b55a9af98","ward_oid":"5f0f39814d89fc3a883de129"}'
