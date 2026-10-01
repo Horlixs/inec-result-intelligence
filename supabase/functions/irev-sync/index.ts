@@ -888,7 +888,7 @@ Deno.serve(async request => {
     }
 
     stage = "insert_pipeline_run";
-    const pipeline = await supabaseRest("pipeline_runs", { method: "POST", headers: { Prefer: "return=minimal" }, body: JSON.stringify({ started_at: startedAt, finished_at: new Date().toISOString(), status: "completed", trigger_source: "server", discovered: elections.length, metadata: { source: "IReV", mode: "server-side-bounded-crawl",
+    const pipeline = await supabaseRest("pipeline_runs", { method: "POST", headers: { Prefer: "return=minimal" }, body: JSON.stringify({ started_at: startedAt, finished_at: new Date().toISOString(), status: electionJobsFailed > 0 ? "completed_with_errors" : "completed", trigger_source: "server", discovered: elections.length, metadata: { source: "IReV", mode: "server-side-bounded-crawl",
         max_elections_per_sync: MAX_ELECTIONS_PER_SYNC,
         max_directory_pages: MAX_DIRECTORY_PAGES,
         max_crawl_pages: MAX_CRAWL_PAGES,
@@ -901,7 +901,7 @@ Deno.serve(async request => {
     const pipelineError = supabaseError("pipeline_runs insert", pipeline);
     if (pipelineError) throw pipelineError;
 
-    return json({ ok: true, discovered: elections.length, processed: electionJobsProcessed, result_sheets_discovered: resultSheetsDiscovered, elections: electionStats, diagnostics: { homepage: homepageDiagnostics, scanned_directory_pages: scannedDirectoryPages, api_discovery_attempts: apiDiscovery.attempts, geography: geographyDiagnostics.slice(-60) } });
+    return json({ ok: true, discovered: elections.length, processed: electionJobsProcessed, failed_election_jobs: electionJobsFailed, result_sheets_discovered: resultSheetsDiscovered, elections: electionStats, diagnostics: { homepage: homepageDiagnostics, scanned_directory_pages: scannedDirectoryPages, api_discovery_attempts: apiDiscovery.attempts, geography: geographyDiagnostics.slice(-60) } });
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     return json({ ok: false, stage, error: message }, 500);
