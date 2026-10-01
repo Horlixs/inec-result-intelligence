@@ -23,35 +23,55 @@ function rows(payload: unknown): Array<Record<string, unknown>> {
 }
 function objectId(value: unknown) { const id = String(value ?? "").trim(); return /^[a-f0-9]{24}$/i.test(id) ? id : null; }
 function errorMessage(error: unknown) { if (error instanceof Error) return error.message; if (typeof error === "string") return error; try { return JSON.stringify(error); } catch { return String(error); } }
-function documentUrl(row: Record<string, unknown>, electionId: string) {
-  const pu = row.polling_unit && typeof row.polling_unit === "object" ? row.polling_unit as Record<string, unknown> : null;
-  const resolve = (value: unknown): string | null => { if (typeof value !== "string" || !value.trim()) return null; try { const u = new URL(value.trim(), "https://inecelectionresults.ng/"); if (u.protocol === "http:") u.protocol = "https:"; return u.protocol === "https:" ? u.toString() : null; } catch { return null; } };
-  const inspect = (value: unknown): string | null => { const direct = resolve(value); if (direct) return direct; if (!value || typeof value !== "object") return null; const obj = value as Record<string, unknown>; for (const key of ["url", "document_url", "file_url", "src", "path", "href"]) { const found = resolve(obj[key]); if (found) return found; } return null; };
-  for (const value of [row.document, row.result, row.result_sheet, row.file, row.file_url, row.document_url, row.url, row.href, pu?.document, pu?.result, pu?.result_sheet, pu?.file, pu?.file_url, pu?.document_url, pu?.url]) { const found = inspect(value); if (found) return found; }
-  for (const value of [row.old_documents, pu?.old_documents]) {
-    if (!Array.isArray(value)) continue;
-    for (const item of [...value].reverse()) {
-      const found = inspect(item);
+function documentUrl(row: Record<string, unknown>) {
+  const pu = row.polling_unit && typeof row.polling_unit === "object"
+    ? row.polling_unit as Record<string, unknown>
+    : null;
+
+  const resolve = (value: unknown): string | null => {
+    if (typeof value !== "string" || !value.trim()) return null;
+    try {
+      const u = new URL(value.trim(), "https://inecelectionresults.ng/");
+      if (u.protocol === "http:") u.protocol = "https:";
+      return u.protocol === "https:" ? u.toString() : null;
+    } catch {
+      return null;
+    }
+  };
+
+  const inspect = (value: unknown): string | null => {
+    const direct = resolve(value);
+    if (direct) return direct;
+    if (!value || typeof value !== "object") return null;
+    const obj = value as Record<string, unknown>;
+    for (const key of ["url", "document_url", "file_url", "src", "path", "href"]) {
+      const found = resolve(obj[key]);
+      if (found) return found;
+    }
+    return null;
+  };
+
+  const values = [
+    row.document, row.result, row.result_sheet, row.file,
+    row.file_url, row.document_url, row.url, row.href,
+    pu?.document, pu?.result, pu?.result_sheet, pu?.file,
+    pu?.file_url, pu?.document_url, pu?.url,
+    row.old_documents, pu?.old_documents,
+  ];
+
+  for (const value of values) {
+    if (Array.isArray(value)) {
+      for (const item of [...value].reverse()) {
+        const found = inspect(item);
+        if (found) return found;
+      }
+    } else {
+      const found = inspect(value);
       if (found) return found;
     }
   }
-  return null;
-}
-async function irevGet(electionId: string, path: string) {
-  const controller = new AbortController(); const timer = setTimeout(() => controller.abort(), 12_000);
-  try {
-    const response = await fetch(IREV_BASE + "/elections/" + encodeURIComponent(electionId) + path, {
-      headers: { "user-agent": "INEC-Result-Intelligence/1.0 source-collector", accept: "application/json, text/plain, */*", origin: "https://inecelectionresults.ng", referer: "https://inecelectionresults.ng/", ...(IREV_KEY ? { "x-api-key": IREV_KEY } : {}), "x-api-rt": String(Date.now()) },
-      signal: controller.signal,
-    });
-    if (!response.ok) throw new Error("IReV " + path + " HTTP " + response.status);
-    const text = await response.text();
-    return text ? JSON.parse(text) : null;
-  } finally { clearTimeout(timer); }
-}
 
-async function fetchWard(electionId: string, wardOid: string) {
-  return irevGet(electionId, "/pus?ward=" + encodeURIComponent(wardOid));
+  return null;
 }
 
 function apiArray(payload: unknown, keys: string[]): Array<Record<string, unknown>> {
@@ -144,7 +164,7 @@ async function processWard(job: Record<string, unknown>) {
     const numericId = Number(pu?.polling_unit_id ?? row.pu_id ?? row.polling_unit_id ?? row.id);
     const code = String(row.pu_code ?? pu?.pu_code ?? row.code ?? pu?.code ?? "").trim() || null;
     const name = String(row.name ?? row.polling_unit_name ?? pu?.name ?? "").trim() || "Unknown polling unit";
-    const sourceUrl = documentUrl(row, irevElectionId);
+    const sourceUrl = documentUrl(row);
     const document = row.document && typeof row.document === "object"
       ? row.document as Record<string, unknown>
       : {};
