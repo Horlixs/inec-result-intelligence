@@ -5,12 +5,16 @@ on:
   push:
     paths:
       - ".github/workflows/irev-pipeline-verification.yml"
+  workflow_run:
+    workflows: ["Deploy Supabase Edge Functions"]
+    types: [completed]
 
 permissions:
   contents: read
 
 jobs:
   verify:
+    if: github.event_name != 'workflow_run' || github.event.workflow_run.conclusion == 'success'
     runs-on: ubuntu-slim
     steps:
       - name: Verify persisted pipeline state
@@ -37,6 +41,7 @@ jobs:
               print("VERIFICATION_STATUS: NOT_YET_PROVEN")
               raise SystemExit(2)
           print("VERIFICATION_STATUS: OCR_EXTRACTION_PERSISTED")
+          print("LATEST_SHEETS:",json.dumps(data.get("latest_sheets",[])[:10],separators=(",",":")))
           print("LATEST_EXTRACTION:",json.dumps(data.get("latest_extraction"),separators=(",",":")))
           print("LATEST_ENTRIES:",json.dumps(data.get("latest_entries",[])[:10],separators=(",",":")))
           print("LATEST_CHECKS:",json.dumps(data.get("latest_checks",[])[:10],separators=(",",":")))
