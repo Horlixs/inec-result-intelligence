@@ -450,7 +450,7 @@ async function discoverApiWardStructure(
         }).filter((ward) => ward.oid || ward.numericId != null || ward.name)
       : [];
 
-    apiLgas.push({ numericId, oid, name, wards });
+    apiLgas.push({ numericId, oid, name, code, wards });
   }
 
   const apiLgaIds = [...new Set(apiLgas.map((lga) => lga.numericId).filter((id): id is number => id != null))];
