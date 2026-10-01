@@ -13,7 +13,7 @@ interface PollingUnit { id: string; ward_id: string; name: string; pu_code: stri
 interface ElectionResultTotal { label: string; total_votes: number | null; reported_polling_units: number | null; polling_units_with_entry: number | null; verified_result_sheets: number | null; }
 interface GeographicResultTotal extends ElectionResultTotal { state_id: string | null; lga_id: string | null; ward_id: string | null; }
 interface PollingUnitResult { election_id: string; polling_unit_id: string | null; result_entry_id: string; label: string; votes: number | null; result_sheet_id: string; extraction_id: string; }
-interface ResultSheet { id: string; source_url: string; status: string; evidence_status: string | null; processed_at: string | null; polling_unit_id: string | null; polling_units: { name: string; pu_code: string | null } | null; }
+interface ResultSheet { id: string; source_url: string; status: string; evidence_status: string | null; processed_at: string | null; polling_unit_id: string | null; polling_unit_name?: string; polling_unit_code?: string | null; }
 type Tab = "overview" | "candidates" | "timeline" | "polling" | "results" | "sources";
 type Category = "Federal" | "State" | "Local Government";
 interface MetricCardProps { label: string; value: string; icon: typeof Users; }
@@ -225,9 +225,11 @@ export function ElectionProfile({ selectedElectionId, onElectionSelect, onBackTo
         const [sheetResponse, verifiedCountResponse] = await Promise.all([
           supabase!
             .from("result_sheets")
-            .select("id,source_url,status,evidence_status,processed_at,polling_unit_id,polling_units(name,pu_code)")
+            .select("id,source_url,status,evidence_status,processed_at,polling_unit_id")
             .eq("election_id", selected)
-            .order("processed_at", { ascending: false, nullsFirst: false })
+            .eq("status", "verified")
+            .not("processed_at", "is", null)
+            .order("processed_at", { ascending: false })
             .limit(24),
           supabase!
             .from("result_sheets")
@@ -238,6 +240,18 @@ export function ElectionProfile({ selectedElectionId, onElectionSelect, onBackTo
 
         if (sheetResponse.error) throw sheetResponse.error;
         if (verifiedCountResponse.error) throw verifiedCountResponse.error;
+
+        const sheetRows = (sheetResponse.data ?? []) as ResultSheet[];
+        const pollingIds = [...new Set(sheetRows.map((sheet) => sheet.polling_unit_id).filter((id): id is string => Boolean(id)))];
+        let pollingMap = new Map<string, PollingUnit>();
+        if (pollingIds.length) {
+          const pollingResponse = await supabase!
+            .from("polling_units")
+            .select("id,ward_id,name,pu_code")
+            .in("id", pollingIds);
+          if (pollingResponse.error) throw pollingResponse.error;
+          pollingMap = new Map(((pollingResponse.data ?? []) as PollingUnit[]).map((unit) => [unit.id, unit]));
+        }
 
         if (pollingUnitId) {
           const response = await supabase!
@@ -283,7 +297,12 @@ export function ElectionProfile({ selectedElectionId, onElectionSelect, onBackTo
         }
 
         if (requestId === loadRequestRef.current) {
-          setResultSheets((sheetResponse.data ?? []) as ResultSheet[]);
+          setResultSheets(sheetRows.map((sheet) => ({
+            ...sheet,
+            polling_unit_name: sheet.polling_unit_id ? pollingMap.get(sheet.polling_unit_id)?.name : undefined,
+            polling_unit_code: sheet.polling_unit_id ? pollingMap.get(sheet.polling_unit_id)?.pu_code : undefined,
+          })));
+          setVerifiedSheetCount(verifiedCountResponse.count ?? 0);
         }
       } catch (cause) {
         if (requestId !== loadRequestRef.current) return;
@@ -512,8 +531,8 @@ export function ElectionProfile({ selectedElectionId, onElectionSelect, onBackTo
                 {resultSheets.filter((sheet) => sheet.status === "verified").slice(0, 8).map((sheet) => (
                   <div key={sheet.id} className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-zinc-800/60 bg-zinc-950/35 px-3.5 py-3">
                     <button type="button" onClick={() => sheet.polling_unit_id && setPollingUnitId(sheet.polling_unit_id)} className="min-w-0 text-left" disabled={!sheet.polling_unit_id}>
-                      <p className="truncate text-sm font-medium text-zinc-200">{sheet.polling_units?.name ?? "Processed polling unit"}</p>
-                      <p className="mt-0.5 text-[10px] text-zinc-600">{sheet.polling_units?.pu_code ?? "PU code unavailable"} · processed {fmt(sheet.processed_at)}</p>
+                      <p className="truncate text-sm font-medium text-zinc-200">{sheet.polling_unit_name ?? "Processed polling unit"}</p>
+                      <p className="mt-0.5 text-[10px] text-zinc-600">{sheet.polling_unit_code ?? "PU code unavailable"} · processed {fmt(sheet.processed_at)}</p>
                     </button>
                     <a href={sheet.source_url} target="_blank" rel="noreferrer" className="inline-flex shrink-0 items-center gap-1.5 text-[11px] font-medium text-zinc-400 hover:text-white">Evidence <ExternalLink size={12} /></a>
                   </div>
