@@ -4,7 +4,6 @@ const url = Deno.env.get("SUPABASE_URL")!;
 const key = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
 const supabase = createClient(url, key);
 
-const MAX_JOBS_PER_REFRESH = 5;
 const MAX_ATTEMPTS = 5;
 const WORKER_ID = `irev-refresh:${crypto.randomUUID()}`;
 
@@ -416,11 +415,6 @@ Deno.serve(async request => {
     const wardJobs = { processed: 0, failed: 0 };
     const queued = 0;
 
-    const { count: remaining } = await supabase
-      .from("result_processing_jobs")
-      .select("id", { count: "exact", head: true })
-      .in("status", ["queued", "processing"]);
-
     await supabase.from("pipeline_runs").insert({
       started_at: started,
       finished_at: new Date().toISOString(),
@@ -437,7 +431,6 @@ Deno.serve(async request => {
         jobs_failed: failed,
         jobs_remaining: remaining ?? 0,
         ward_jobs_remaining: wardQueue ?? 0,
-        max_jobs_per_refresh: MAX_JOBS_PER_REFRESH,
       },
     });
 

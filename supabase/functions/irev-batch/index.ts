@@ -233,7 +233,27 @@ async function finishSheet(jobId: string, attempts: number, ok: boolean, error?:
   if (result.error) throw result.error;
 }
 
-async function queueCounts() { const [wards, sheets] = await Promise.all([supabase.from("irev_ward_sync_jobs").select("id", { count: "exact", head: true }).in("status", ["queued", "processing"]), supabase.from("result_processing_jobs").select("id", { count: "exact", head: true }).in("status", ["queued", "processing"])]); if (wards.error) throw wards.error; if (sheets.error) throw sheets.error; return { ward_jobs: wards.count ?? 0, sheet_jobs: sheets.count ?? 0, total: (wards.count ?? 0) + (sheets.count ?? 0) }; }
+async function queueCounts() {
+  const [wardQueued, wardProcessing, sheetQueued, sheetProcessing] = await Promise.all([
+    supabase.from("irev_ward_sync_jobs").select("id", { count: "exact", head: true }).eq("status", "queued"),
+    supabase.from("irev_ward_sync_jobs").select("id", { count: "exact", head: true }).eq("status", "processing"),
+    supabase.from("result_processing_jobs").select("id", { count: "exact", head: true }).eq("status", "queued"),
+    supabase.from("result_processing_jobs").select("id", { count: "exact", head: true }).eq("status", "processing"),
+  ]);
+  if (wardQueued.error) throw wardQueued.error;
+  if (wardProcessing.error) throw wardProcessing.error;
+  if (sheetQueued.error) throw sheetQueued.error;
+  if (sheetProcessing.error) throw sheetProcessing.error;
+  return {
+    ward_jobs: (wardQueued.count ?? 0) + (wardProcessing.count ?? 0),
+    sheet_jobs: (sheetQueued.count ?? 0) + (sheetProcessing.count ?? 0),
+    ward_queued: wardQueued.count ?? 0,
+    ward_processing: wardProcessing.count ?? 0,
+    sheet_queued: sheetQueued.count ?? 0,
+    sheet_processing: sheetProcessing.count ?? 0,
+    total: (wardQueued.count ?? 0) + (wardProcessing.count ?? 0) + (sheetQueued.count ?? 0) + (sheetProcessing.count ?? 0),
+  };
+}
 async function updateHeartbeat(values: Record<string, unknown>) {
   const { error } = await supabase.from("pipeline_worker_status").upsert({
     id: "irev-ocr-drain",
@@ -248,8 +268,8 @@ async function refreshHeartbeat(extra: Record<string, unknown> = {}) {
   try {
     const counts = await queueCounts();
     await updateHeartbeat({
-      queue_remaining: counts.total,
-      active_jobs: counts.sheet_jobs,
+      queue_remaining: counts.sheet_queued,
+      active_jobs: counts.sheet_processing,
       ...extra,
     });
     return counts;

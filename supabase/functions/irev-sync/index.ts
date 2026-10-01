@@ -901,7 +901,7 @@ Deno.serve(async request => {
     const pipelineError = supabaseError("pipeline_runs insert", pipeline);
     if (pipelineError) throw pipelineError;
 
-    return json({ ok: true, discovered: elections.length, processed: electionsToProcess.length, result_sheets_discovered: resultSheetsDiscovered, elections: electionStats, diagnostics: { homepage: homepageDiagnostics, scanned_directory_pages: scannedDirectoryPages, api_discovery_attempts: apiDiscovery.attempts, geography: geographyDiagnostics.slice(-60) } });
+    return json({ ok: true, discovered: elections.length, processed: electionJobsProcessed, result_sheets_discovered: resultSheetsDiscovered, elections: electionStats, diagnostics: { homepage: homepageDiagnostics, scanned_directory_pages: scannedDirectoryPages, api_discovery_attempts: apiDiscovery.attempts, geography: geographyDiagnostics.slice(-60) } });
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     return json({ ok: false, stage, error: message }, 500);
