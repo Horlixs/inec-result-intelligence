@@ -10,6 +10,8 @@ const ORIGIN = "https://inecelectionresults.ng";
 // Deployment verification marker: Gemini secret wiring test. // deployment secret sync checkpoint
 const UA = "INEC-Result-Intelligence/1.0 evidence-collector";
 const MAX_EVIDENCE_BYTES = 20 * 1024 * 1024;
+const IREV_API_BASE = "https://dolphin-app-sleqh.ondigitalocean.app/api/v1";
+const IREV_KEY = Deno.env.get("IREV_KEY")?.trim() || null;
 
 function sha256(bytes: Uint8Array): Promise<string> {
   return crypto.subtle.digest("SHA-256", bytes).then(buffer =>
@@ -86,6 +88,151 @@ function extractDocumentAssets(html: string, pageUrl: string): string[] {
   for (const match of html.matchAll(media)) add(match[1]);
 
   return [...assets];
+}
+
+function pollingUnitRows(payload: unknown): Array<Record<string, unknown>> {
+  if (Array.isArray(payload)) {
+    return payload.filter((value): value is Record<string, unknown> =>
+      !!value && typeof value === "object"
+    );
+  }
+  if (!payload || typeof payload !== "object") return [];
+  const object = payload as Record<string, unknown>;
+  for (const key of ["data", "polling_units", "pus", "results", "items"]) {
+    const value = object[key];
+    if (Array.isArray(value)) {
+      return value.filter((item): item is Record<string, unknown> =>
+        !!item && typeof item === "object"
+      );
+    }
+  }
+  return [];
+}
+
+function extractDocumentUrl(row: Record<string, unknown>): { url: string; documentId: string | null } | null {
+  const document = row.document && typeof row.document === "object"
+    ? row.document as Record<string, unknown>
+    : row.result && typeof row.result === "object"
+      ? row.result as Record<string, unknown>
+      : null;
+
+  const value = document?.url ?? document?.document_url ?? document?.file_url ??
+    row.document_url ?? row.file_url ?? row.url;
+
+  if (typeof value !== "string" || !value.trim()) return null;
+
+  try {
+    const url = new URL(value.trim(), ORIGIN + "/");
+    if (url.protocol === "http:") url.protocol = "https:";
+    if (url.protocol !== "https:") return null;
+
+    const documentId = String(
+      document?._id ?? row.document_id ?? ""
+    ).trim() || null;
+
+    return { url: url.toString(), documentId };
+  } catch {
+    return null;
+  }
+}
+
+async function resolveCanonicalIrevSource(
+  sheet: Record<string, unknown>,
+  sourceUrl: string,
+): Promise<{ url: string; documentId: string | null }> {
+  let parsed: URL;
+  try {
+    parsed = new URL(sourceUrl);
+  } catch {
+    return { url: sourceUrl, documentId: null };
+  }
+
+  const match = parsed.pathname.match(
+    /^\/elections\/([^/]+)\/pu\/([^/]+)\/document(?:\/)?$/,
+  );
+  if (!match) return { url: sourceUrl, documentId: null };
+
+  const electionExternalId = decodeURIComponent(match[1]);
+  const routePuId = decodeURIComponent(match[2]);
+  const pollingUnitId = String(sheet.polling_unit_id ?? "").trim();
+  if (!pollingUnitId) return { url: sourceUrl, documentId: null };
+
+  const { data: pollingUnit, error: pollingUnitError } = await supabase
+    .from("polling_units")
+    .select("external_id,ward_id")
+    .eq("id", pollingUnitId)
+    .single();
+  if (pollingUnitError || !pollingUnit) {
+    throw new Error(
+      "Polling unit identity unavailable while resolving IReV document: " +
+      (pollingUnitError?.message ?? "not found"),
+    );
+  }
+
+  const { data: ward, error: wardError } = await supabase
+    .from("wards")
+    .select("irev_ward_oid")
+    .eq("id", pollingUnit.ward_id)
+    .single();
+  if (wardError || !ward?.irev_ward_oid) {
+    throw new Error(
+      "Ward IReV identity unavailable while resolving IReV document: " +
+      (wardError?.message ?? "not found"),
+    );
+  }
+
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 20_000);
+  try {
+    const response = await fetch(
+      IREV_API_BASE + "/elections/" + encodeURIComponent(electionExternalId) +
+      "/pus?ward=" + encodeURIComponent(String(ward.irev_ward_oid)),
+      {
+        headers: {
+          "user-agent": UA,
+          accept: "application/json, text/plain, */*",
+          origin: ORIGIN,
+          referer: ORIGIN + "/",
+          ...(IREV_KEY ? { "x-api-key": IREV_KEY } : {}),
+          "x-api-rt": String(Date.now()),
+        },
+        signal: controller.signal,
+      },
+    );
+
+    if (!response.ok) {
+      throw new Error("IReV document resolution HTTP " + response.status);
+    }
+
+    const text = await response.text();
+    const payload = text ? JSON.parse(text) : null;
+    const rows = pollingUnitRows(payload);
+
+    for (const row of rows) {
+      const nestedPu = row.polling_unit && typeof row.polling_unit === "object"
+        ? row.polling_unit as Record<string, unknown>
+        : null;
+      const puId = String(
+        nestedPu?._id ??
+        row.polling_unit_oid ??
+        row.external_id ??
+        row._id ??
+        "",
+      ).trim();
+
+      if (
+        puId === routePuId ||
+        puId === String(pollingUnit.external_id ?? "").trim()
+      ) {
+        const document = extractDocumentUrl(row);
+        if (document) return document;
+      }
+    }
+
+    return { url: sourceUrl, documentId: null };
+  } finally {
+    clearTimeout(timer);
+  }
 }
 
 async function fetchEvidence(sourceUrl: string) {
@@ -324,7 +471,16 @@ Deno.serve(async request => {
   }).eq("id", id);
 
   try {
-    const evidence = await fetchEvidence(sheet.source_url);
+    const resolvedSource = await resolveCanonicalIrevSource(sheet, sheet.source_url);
+    if (resolvedSource.url !== sheet.source_url) {
+      const { error: sourceUpdateError } = await supabase.from("result_sheets").update({
+        source_url: resolvedSource.url,
+        ...(resolvedSource.documentId ? { source_external_id: resolvedSource.documentId } : {}),
+      }).eq("id", id);
+      if (sourceUpdateError) throw sourceUpdateError;
+    }
+
+    const evidence = await fetchEvidence(resolvedSource.url);
     const hash = await sha256(evidence.bytes);
 
     if (sheet.source_hash === hash && sheet.status === "verified") {
