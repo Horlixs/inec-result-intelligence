@@ -5,7 +5,7 @@ const SERVICE_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
 const supabase = createClient(SUPABASE_URL, SERVICE_KEY);
 const IREV_BASE = "https://dolphin-app-sleqh.ondigitalocean.app/api/v1";
 const IREV_KEY = Deno.env.get("IREV_KEY")?.trim() || null;
-const MAX_WARD_JOBS = 1;
+const MAX_WARD_JOBS = 5;
 const CONCURRENT_SHEET_JOBS = 3;
 const MAX_SHEET_BATCHES = 3;
 const MAX_SHEET_JOBS = CONCURRENT_SHEET_JOBS * MAX_SHEET_BATCHES;
@@ -74,42 +74,150 @@ function findWardInElectionLga(payload: unknown, wardOid: string, wardNumericId:
 }
 async function claimWard() { const { data, error } = await supabase.rpc("claim_irev_ward_sync_job", { p_worker_id: WORKER_ID, p_max_attempts: MAX_ATTEMPTS }); if (error) throw error; return data?.[0] ?? null; }
 async function processWard(job: Record<string, unknown>) {
-  const electionId = String(job.election_id); const wardId = String(job.ward_id);
-  const election = await supabase.from("elections").select("external_id").eq("id", electionId).single(); if (election.error || !election.data?.external_id) throw new Error("Election IReV identity unavailable");
-  const ward = await supabase.from("wards").select("irev_ward_oid").eq("id", wardId).single(); if (ward.error || !ward.data?.irev_ward_oid) throw new Error("Ward IReV identity unavailable");
+  const electionId = String(job.election_id);
+  const wardId = String(job.ward_id);
+  const [election, ward] = await Promise.all([
+    supabase.from("elections").select("external_id").eq("id", electionId).single(),
+    supabase.from("wards").select("irev_ward_oid,irev_ward_id").eq("id", wardId).single(),
+  ]);
+  if (election.error || !election.data?.external_id) throw new Error("Election IReV identity unavailable");
+  if (ward.error || !ward.data?.irev_ward_oid) throw new Error("Ward IReV identity unavailable");
+
   const irevElectionId = String(election.data.external_id).replace(/^irev:/, "");
   const wardOid = String(ward.data.irev_ward_oid);
   const wardNumericId = Number(ward.data.irev_ward_id);
-  let resolvedWard = { oid: apiObjectId(wardOid), numericId: Number.isInteger(wardNumericId) ? wardNumericId : null, name: null as string | null, lgaOid: null as string | null };
+  let resolvedWard = {
+    oid: apiObjectId(wardOid),
+    numericId: Number.isInteger(wardNumericId) ? wardNumericId : null,
+    name: null as string | null,
+    lgaOid: null as string | null,
+  };
   let hierarchySource: "canonical" | "election_lga_fallback" = "canonical";
+
   let payload = await fetchWard(irevElectionId, wardOid);
   let puRows = rows(payload);
   if (!puRows.length) {
     const hierarchy = await irevGet(irevElectionId, "/lga");
     const matched = findWardInElectionLga(hierarchy, wardOid, resolvedWard.numericId);
-    if (matched?.oid && matched.oid.toLowerCase() !== wardOid.toLowerCase()) { resolvedWard = matched; hierarchySource = "election_lga_fallback"; payload = await fetchWard(irevElectionId, matched.oid); puRows = rows(payload); }
+    if (matched?.oid && matched.oid.toLowerCase() !== wardOid.toLowerCase()) {
+      resolvedWard = matched;
+      hierarchySource = "election_lga_fallback";
+      payload = await fetchWard(irevElectionId, matched.oid);
+      puRows = rows(payload);
+    }
   }
-  const diagnostics = { requested_ward_oid: wardOid, requested_ward_numeric_id: resolvedWard.numericId, resolved_ward_oid: resolvedWard.oid, resolved_ward_name: resolvedWard.name, resolved_lga_oid: resolvedWard.lgaOid, hierarchy_source: hierarchySource, polling_units: puRows.length, payload_success: payload && typeof payload === "object" ? (payload as Record<string, unknown>).success ?? null : null };
-  let sheets = 0;
+
+  const diagnostics = {
+    requested_ward_oid: wardOid,
+    requested_ward_numeric_id: resolvedWard.numericId,
+    resolved_ward_oid: resolvedWard.oid,
+    resolved_ward_name: resolvedWard.name,
+    resolved_lga_oid: resolvedWard.lgaOid,
+    hierarchy_source: hierarchySource,
+    polling_units: puRows.length,
+    payload_success: payload && typeof payload === "object"
+      ? (payload as Record<string, unknown>).success ?? null
+      : null,
+  };
+
+  type NormalizedPu = {
+    name: string;
+    pu_code: string | null;
+    external_id: string | null;
+    irev_pu_id: number | null;
+    source_url: string | null;
+    source_external_id: string;
+  };
+
+  const normalized: NormalizedPu[] = [];
   for (const row of puRows) {
-    const pu = row.polling_unit && typeof row.polling_unit === "object" ? row.polling_unit as Record<string, unknown> : null;
+    const pu = row.polling_unit && typeof row.polling_unit === "object"
+      ? row.polling_unit as Record<string, unknown>
+      : null;
     const externalId = String(pu?._id ?? row.polling_unit_oid ?? row.external_id ?? row._id ?? "").trim() || null;
     const numericId = Number(pu?.polling_unit_id ?? row.pu_id ?? row.polling_unit_id ?? row.id);
     const code = String(row.pu_code ?? pu?.pu_code ?? row.code ?? pu?.code ?? "").trim() || null;
     const name = String(row.name ?? row.polling_unit_name ?? pu?.name ?? "").trim() || "Unknown polling unit";
-    let pollingUnitId: string | null = null;
-    if (code) { const lookup = await supabase.from("polling_units").select("id").eq("ward_id", wardId).eq("pu_code", code).maybeSingle(); if (lookup.error) throw lookup.error; pollingUnitId = lookup.data?.id ?? null; }
-    if (!pollingUnitId && externalId) { const lookup = await supabase.from("polling_units").select("id").eq("ward_id", wardId).eq("external_id", externalId).maybeSingle(); if (lookup.error) throw lookup.error; pollingUnitId = lookup.data?.id ?? null; }
-    if (!pollingUnitId) { const created = await supabase.from("polling_units").insert({ ward_id: wardId, pu_code: code, name, external_id: externalId, irev_pu_id: Number.isInteger(numericId) ? numericId : null }).select("id").single(); if (created.error) throw created.error; pollingUnitId = created.data.id; } else { const updated = await supabase.from("polling_units").update({ name, external_id: externalId, irev_pu_id: Number.isInteger(numericId) ? numericId : null }).eq("id", pollingUnitId); if (updated.error) throw updated.error; }
-    const sourceUrl = documentUrl(row, irevElectionId); if (!sourceUrl) continue;
-    const document = row.document && typeof row.document === "object" ? row.document as Record<string, unknown> : {};
-    const sourceExternalId = String(document._id ?? row.document_id ?? pu?.document_id ?? externalId ?? sourceUrl);
-    // Do not overwrite an existing sheet's processing state during discovery.
-    // Verified results are immutable from the perspective of the collector.
-    const result = await supabase.from("result_sheets").insert({ election_id: electionId, polling_unit_id: pollingUnitId, source_url: sourceUrl, source_external_id: sourceExternalId, status: "discovered", evidence_status: "remote_only", storage_policy: "ephemeral", discovered_at: new Date().toISOString() }, { ignoreDuplicates: true });
-    if (result.error) throw result.error; sheets++;
+    const sourceUrl = documentUrl(row, irevElectionId);
+    const document = row.document && typeof row.document === "object"
+      ? row.document as Record<string, unknown>
+      : {};
+
+    normalized.push({
+      name,
+      pu_code: code,
+      external_id: externalId,
+      irev_pu_id: Number.isInteger(numericId) ? numericId : null,
+      source_url: sourceUrl,
+      source_external_id: String(document._id ?? row.document_id ?? pu?.document_id ?? externalId ?? sourceUrl ?? (wardId + ":" + name)),
+    });
   }
-  return { polling_units: puRows.length, result_sheets: sheets, diagnostics };
+
+  // Persist the whole ward in bulk. The old implementation performed multiple
+  // database round-trips per polling unit and could exhaust the Edge Function
+  // wall-clock budget before it reached the result-sheet inserts.
+  const puRowsToUpsert = normalized.map((pu) => ({
+    ward_id: wardId,
+    name: pu.name,
+    pu_code: pu.pu_code,
+    external_id: pu.external_id,
+    irev_pu_id: pu.irev_pu_id,
+  }));
+  if (puRowsToUpsert.length) {
+    const { error } = await supabase
+      .from("polling_units")
+      .upsert(puRowsToUpsert, { onConflict: "ward_id,name", ignoreDuplicates: false });
+    if (error) throw error;
+  }
+
+  const pollingUnits = await supabase
+    .from("polling_units")
+    .select("id,name,pu_code,external_id,irev_pu_id")
+    .eq("ward_id", wardId);
+  if (pollingUnits.error) throw pollingUnits.error;
+
+  const byCode = new Map<string, string>();
+  const byExternal = new Map<string, string>();
+  const byName = new Map<string, string>();
+  for (const row of pollingUnits.data ?? []) {
+    if (row.pu_code) byCode.set(String(row.pu_code), row.id);
+    if (row.external_id) byExternal.set(String(row.external_id), row.id);
+    if (row.name) byName.set(String(row.name), row.id);
+  }
+
+  const sheetRows = normalized
+    .filter((pu) => pu.source_url)
+    .map((pu) => {
+      const pollingUnitId =
+        (pu.pu_code ? byCode.get(pu.pu_code) : undefined) ??
+        (pu.external_id ? byExternal.get(pu.external_id) : undefined) ??
+        byName.get(pu.name);
+      if (!pollingUnitId) throw new Error("Polling unit identity could not be resolved: " + pu.name);
+
+      return {
+        election_id: electionId,
+        polling_unit_id: pollingUnitId,
+        source_url: pu.source_url,
+        source_external_id: pu.source_external_id,
+        status: "discovered",
+        evidence_status: "remote_only",
+        storage_policy: "ephemeral",
+        discovered_at: new Date().toISOString(),
+      };
+    });
+
+  if (sheetRows.length) {
+    const { error } = await supabase
+      .from("result_sheets")
+      .upsert(sheetRows, { onConflict: "election_id,source_url", ignoreDuplicates: true });
+    if (error) throw error;
+  }
+
+  return {
+    polling_units: puRows.length,
+    result_sheets: sheetRows.length,
+    diagnostics,
+  };
 }
 async function finishWard(jobId: string, attempts: number, ok: boolean, error?: string) { const update = ok ? { status: "completed", locked_at: null, locked_by: null, last_error: null, last_synced_at: new Date().toISOString(), updated_at: new Date().toISOString() } : { status: attempts < MAX_ATTEMPTS ? "queued" : "failed", locked_at: null, locked_by: null, last_error: error ?? "Unknown error", available_at: new Date(Date.now() + 15 * 60_000).toISOString(), updated_at: new Date().toISOString() }; const result = await supabase.from("irev_ward_sync_jobs").update(update).eq("id", jobId); if (result.error) throw result.error; }
 async function enqueueSheets() { const { data, error } = await supabase.from("result_sheets").select("id").eq("status", "discovered").order("discovered_at", { ascending: true }).limit(100); if (error) throw error; if (!data?.length) return 0; const result = await supabase.from("result_processing_jobs").upsert(data.map(x => ({ result_sheet_id: x.id, status: "queued" })), { onConflict: "result_sheet_id", ignoreDuplicates: true }); if (result.error) throw result.error; return data.length; }
