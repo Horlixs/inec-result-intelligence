@@ -11,7 +11,7 @@ const WORKER_ID = `irev-refresh:${crypto.randomUUID()}`;
 const IREV_API_BASES = [
   "https://dolphin-app-sleqh.ondigitalocean.app/api/v1",
 ];
-const IREV_PUBLIC_KEY = "4SXkHM7Amb1SbF4C8do6816dmbbwqPp7akRbrmcV";
+const IREV_KEY = Deno.env.get("IREV_KEY")?.trim() || null;
 const WARD_MAX_ATTEMPTS = 5;
 
 async function fetchIrevWard(electionExternalId: string, wardObjectId: string): Promise<unknown> {
@@ -28,7 +28,7 @@ async function fetchIrevWard(electionExternalId: string, wardObjectId: string): 
             accept: "application/json, text/plain, */*",
             origin: "https://inecelectionresults.ng",
             referer: "https://inecelectionresults.ng/",
-            "x-api-key": IREV_PUBLIC_KEY,
+            ...(IREV_KEY ? { "x-api-key": IREV_KEY } : {}),
             "x-api-rt": String(Date.now()),
           },
           signal: controller.signal,
