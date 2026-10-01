@@ -237,18 +237,34 @@ If this is a PDF, inspect the document visually and use the result sheet itself,
     generationConfig: { temperature: 0, responseMimeType: "application/json" },
   };
 
-  const response = await fetch(
-    "https://generativelanguage.googleapis.com/v1beta/models/gemini-3.8-flash:generateContent?key=" +
-      encodeURIComponent(geminiKey),
-    {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify(body),
-    },
-  );
+  const endpoint = "https://generativelanguage.googleapis.com/v1beta/models/gemini-3.8-flash:generateContent";
+  let response: Response | null = null;
+  let lastError = "";
 
-  if (!response.ok) {
-    throw new Error("Gemini returned HTTP " + response.status + ": " + (await response.text()).slice(0, 500));
+  for (let attempt = 1; attempt <= 3; attempt++) {
+    response = await fetch(endpoint, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        "x-goog-api-key": geminiKey,
+      },
+      body: JSON.stringify(body),
+    });
+
+    if (response.ok) break;
+
+    const message = (await response.text()).slice(0, 1000);
+    lastError = "Gemini returned HTTP " + response.status + ": " + message;
+
+    if (![429, 500, 502, 503, 504].includes(response.status) || attempt === 3) {
+      throw new Error(lastError);
+    }
+
+    await new Promise(resolve => setTimeout(resolve, attempt * 3000));
+  }
+
+  if (!response || !response.ok) {
+    throw new Error(lastError || "Gemini request failed.");
   }
 
   const json = await response.json();
