@@ -16,33 +16,29 @@ jobs:
       - name: Verify persisted pipeline state
         env:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
-          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+          SUPABASE_ANON_KEY: ${{ secrets.SUPABASE_ANON_KEY }}
         run: |
           set -euo pipefail
           test -n "$SUPABASE_URL"
           test -n "$SUPABASE_SERVICE_ROLE_KEY"
-          api="$SUPABASE_URL/rest/v1"
-          auth=(-H "apikey: $SUPABASE_SERVICE_ROLE_KEY" -H "Authorization: Bearer $SUPABASE_SERVICE_ROLE_KEY")
-          sheets=$(curl --fail-with-body --silent --show-error "$api/result_sheets?select=id,status,evidence_status,processed_at,last_error&order=processed_at.desc.nullslast&limit=10" "${auth[@]}")
-          extractions=$(curl --fail-with-body --silent --show-error "$api/extractions?select=id,result_sheet_id,engine,engine_version,confidence,status,created_at&order=created_at.desc&limit=10" "${auth[@]}")
-          entries=$(curl --fail-with-body --silent --show-error "$api/result_entries?select=id,extraction_id,label,votes&order=id.desc&limit=20" "${auth[@]}")
-          checks=$(curl --fail-with-body --silent --show-error "$api/validation_checks?select=id,extraction_id,check_name,passed,severity&order=id.desc&limit=20" "${auth[@]}")
-          python3 - "$sheets" "$extractions" "$entries" "$checks" <<'PY'
+          response=$(curl --fail-with-body --silent --show-error \
+            -X POST "$SUPABASE_URL/functions/v1/irev-verify-pipeline" \
+            -H "Authorization: Bearer $SUPABASE_ANON_KEY" \
+            -H "apikey: $SUPABASE_ANON_KEY" \
+            -H "Content-Type: application/json" \
+            -d '{}')
+          echo "$response"
+          python3 - "$response" <<'PY'
           import json,sys
-          sheets,extractions,entries,checks=map(json.loads,sys.argv[1:])
-          processed=[x for x in sheets if x.get("processed_at")]
-          successful=[x for x in sheets if x.get("status") in ("verified","pending_review")]
-          print("RESULT_SHEETS:",len(sheets))
-          print("PROCESSED_SHEETS:",len(processed))
-          print("SUCCESS_OR_REVIEW_SHEETS:",len(successful))
-          print("EXTRACTIONS:",len(extractions))
-          print("RESULT_ENTRIES:",len(entries))
-          print("VALIDATION_CHECKS:",len(checks))
-          if extractions: print("LATEST_EXTRACTION:",json.dumps(extractions[0],separators=(",",":")))
-          if entries: print("LATEST_ENTRIES:",json.dumps(entries[:10],separators=(",",":")))
-          if checks: print("LATEST_CHECKS:",json.dumps(checks[:10],separators=(",",":")))
-          if not processed or not extractions or not entries or not checks:
+          data=json.loads(sys.argv[1])
+          if not data.get("ok"): raise SystemExit("Verification function failed: "+str(data.get("error")))
+          c=data["counts"]
+          print("COUNTS:",json.dumps(c,separators=(",",":")))
+          if not all(c.get(k,0)>0 for k in ("processed_sheets","extractions","result_entries","validation_checks")):
               print("VERIFICATION_STATUS: NOT_YET_PROVEN")
               raise SystemExit(2)
           print("VERIFICATION_STATUS: OCR_EXTRACTION_PERSISTED")
+          print("LATEST_EXTRACTION:",json.dumps(data.get("latest_extraction"),separators=(",",":")))
+          print("LATEST_ENTRIES:",json.dumps(data.get("latest_entries",[])[:10],separators=(",",":")))
+          print("LATEST_CHECKS:",json.dumps(data.get("latest_checks",[])[:10],separators=(",",":")))
           PY
