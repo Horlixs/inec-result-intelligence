@@ -99,17 +99,17 @@ Deno.serve(async request => {
     }
 
     const before = await queueState();
-    const freshWardWorkers = before.ward_processing > 0;
-    const freshSheetWorkers = before.sheet_processing > 0;
     const workWaiting = before.ward_queued > 0 || before.sheet_queued > 0 || before.discovered_sheets > 0;
     let batch: unknown = null;
 
-    // The watchdog is deliberately conservative: if another worker is active,
-    // do not start a second one. If work is waiting and no worker is active,
-    // wake the bounded worker immediately.
-    if (workWaiting && !freshWardWorkers && !freshSheetWorkers) {
+    // The batch worker owns the durable lease. This removes the race where
+    // two schedulers both observe zero active rows and start simultaneously.
+    // If a manual run has requested priority, the worker returns a clean
+    // skipped/busy response and the next 3-minute tick will try again.
+    if (workWaiting) {
       batch = await invoke("/functions/v1/irev-batch", {
         trigger: "supabase-cron-watchdog",
+        mode: "scheduled",
       });
     }
 
@@ -122,7 +122,7 @@ Deno.serve(async request => {
       refresh,
       watchdog: {
         work_waiting: workWaiting,
-        worker_active: freshWardWorkers || freshSheetWorkers,
+        worker_active: before.ward_processing > 0 || before.sheet_processing > 0,
         invoked: batch !== null,
         before,
         after,
