@@ -78,5 +78,4 @@ select cron.schedule(
       and cfg.pipeline_key is not null
       and cfg.cron_secret is not null;
   $$
-)
-on conflict do nothing;
+);
