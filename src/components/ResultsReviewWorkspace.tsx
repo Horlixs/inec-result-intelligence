@@ -90,11 +90,6 @@ function formatDate(value: string | null | undefined) {
   return new Date(value).toLocaleString();
 }
 
-function bytes(value: number | null) {
-  if (!value) return "—";
-  if (value < 1024 * 1024) return Math.round(value / 1024) + " KB";
-  return (value / (1024 * 1024)).toFixed(2) + " MB";
-}
 
 function isIssue(sheet: Sheet, extraction: Extraction | null, checks: Check[]) {
   // A check's severity describes the importance of a failed check; a passed
