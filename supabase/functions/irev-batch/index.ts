@@ -280,11 +280,38 @@ async function finishWard(jobId: string, attempts: number, ok: boolean, error?: 
 async function enqueueSheets() { const { data, error } = await supabase.from("result_sheets").select("id").eq("status", "discovered").order("discovered_at", { ascending: true }).limit(100); if (error) throw error; if (!data?.length) return 0; const result = await supabase.from("result_processing_jobs").upsert(data.map(x => ({ result_sheet_id: x.id, status: "queued" })), { onConflict: "result_sheet_id", ignoreDuplicates: true }); if (result.error) throw result.error; return data.length; }
 async function claimSheet() { const { data, error } = await supabase.rpc("claim_result_processing_job", { p_worker_id: WORKER_ID, p_max_attempts: MAX_ATTEMPTS }); if (error) throw error; return data?.[0] ?? null; }
 async function invokeProcess(sheetId: string) { const response = await fetch(`${SUPABASE_URL.replace(/\/$/, "")}/functions/v1/irev-process`, { method: "POST", headers: { authorization: `Bearer ${SERVICE_KEY}`, apikey: SERVICE_KEY, "content-type": "application/json" }, body: JSON.stringify({ result_sheet_id: sheetId }) }); const body = await response.json().catch(() => ({})); if (!response.ok || body?.ok === false) throw new Error(body?.error ?? `irev-process HTTP ${response.status}`); return body; }
+function nextGeminiQuotaResetAt(): string {
+  const now = new Date();
+  const parts = new Intl.DateTimeFormat("en-US", {
+    timeZone: "America/Los_Angeles",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    timeZoneName: "longOffset",
+  }).formatToParts(now);
+  const get = (type: string) => parts.find(part => part.type === type)?.value ?? "";
+  const offset = get("timeZoneName").replace("GMT", "");
+  const localDate = `${get("year")}-${get("month")}-${get("day")}`;
+  // Gemini's daily quota resets at midnight Pacific. Add five minutes so the
+  // queue does not immediately stampede the API at the reset boundary.
+  const reset = new Date(`${localDate}T00:05:00${offset}`);
+  reset.setUTCDate(reset.getUTCDate() + 1);
+  return reset.toISOString();
+}
+
 async function finishSheet(jobId: string, attempts: number, ok: boolean, error?: string, defer = false) {
   const update = ok
     ? { status: "completed", locked_at: null, locked_by: null, last_error: null, completed_at: new Date().toISOString(), updated_at: new Date().toISOString() }
     : defer
-      ? { status: "queued", attempts: Math.max(0, attempts - 1), locked_at: null, locked_by: null, last_error: error ?? "Temporarily deferred", available_at: new Date(Date.now() + 65_000).toISOString(), updated_at: new Date().toISOString() }
+      ? {
+          status: "queued",
+          attempts: Math.max(0, attempts - 1),
+          locked_at: null,
+          locked_by: null,
+          last_error: error ?? "Temporarily deferred",
+          available_at: nextGeminiQuotaResetAt(),
+          updated_at: new Date().toISOString(),
+        }
       : { status: attempts < MAX_ATTEMPTS ? "queued" : "failed", locked_at: null, locked_by: null, last_error: error ?? "Unknown processing error", available_at: new Date(Date.now() + 15 * 60_000).toISOString(), updated_at: new Date().toISOString() };
   const result = await supabase.from("result_processing_jobs").update(update).eq("id", jobId);
   if (result.error) throw result.error;
