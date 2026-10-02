@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
+import { CheckCircle2, Plus, Save, Search, Trash2, X } from "lucide-react";
 import { supabase } from "../lib/supabase";
 
 type Sheet = {
@@ -18,6 +19,9 @@ type Sheet = {
   evidence_status: string | null;
   processing_attempts: number | null;
   last_error: string | null;
+  reviewed_at?: string | null;
+  reviewed_by?: string | null;
+  review_note?: string | null;
 };
 
 type Election = { id: string; name: string; election_type: string | null; election_date: string | null };
@@ -25,6 +29,7 @@ type PollingUnit = { id: string; name: string; pu_code: string | null; ward_id: 
 type Ward = { id: string; name: string; lga_id: string };
 type Lga = { id: string; name: string; state_id: string };
 type State = { id: string; name: string };
+type Candidate = { id: string; name: string; ballot_order: number | null; party_id: string | null; party?: { abbreviation: string; name: string | null } | null };
 
 type Extraction = {
   id: string;
@@ -37,8 +42,25 @@ type Extraction = {
   created_at: string;
 };
 
-type Entry = { id: string; extraction_id: string; label: string; votes: number | null; raw_label: string | null; raw_value: string | null };
-type Check = { id: string; extraction_id: string; check_name: string; passed: boolean; severity: string; details: Record<string, unknown> | null; created_at: string };
+type Entry = {
+  id: string;
+  extraction_id: string;
+  candidate_id: string | null;
+  label: string;
+  votes: number | null;
+  raw_label: string | null;
+  raw_value: string | null;
+};
+
+type Check = {
+  id: string;
+  extraction_id: string;
+  check_name: string;
+  passed: boolean;
+  severity: string;
+  details: Record<string, unknown> | null;
+  created_at: string;
+};
 
 type ReviewRecord = Sheet & {
   election?: Election;
@@ -49,6 +71,14 @@ type ReviewRecord = Sheet & {
   extraction?: Extraction | null;
   entries: Entry[];
   checks: Check[];
+};
+
+type EntryDraft = {
+  id?: string;
+  candidate_id: string | null;
+  label: string;
+  votes: string;
+  raw_label: string;
 };
 
 const issueStatuses = ["pending_review", "failed", "processing"];
@@ -67,13 +97,25 @@ function bytes(value: number | null) {
 }
 
 function isIssue(sheet: Sheet, extraction: Extraction | null, checks: Check[]) {
+  // A check's severity describes the importance of a failed check; a passed
+  // check must never turn a verified result into a review issue.
   return issueStatuses.includes(sheet.status) ||
-    Boolean(checks.some(check => !check.passed || check.severity === "error")) ||
+    Boolean(checks.some(check => !check.passed)) ||
     Boolean(extraction && extraction.confidence !== null && extraction.confidence < 0.85);
 }
 
 function statusLabel(status: string) {
   return status.replaceAll("_", " ");
+}
+
+function draftEntries(entries: Entry[]): EntryDraft[] {
+  return entries.map(entry => ({
+    id: entry.id,
+    candidate_id: entry.candidate_id,
+    label: entry.label,
+    votes: entry.votes === null ? "" : String(entry.votes),
+    raw_label: entry.raw_label ?? entry.label,
+  }));
 }
 
 export function ResultsReviewWorkspace() {
@@ -85,6 +127,11 @@ export function ResultsReviewWorkspace() {
   const [selected, setSelected] = useState<ReviewRecord | null>(null);
   const [reviewNote, setReviewNote] = useState("");
   const [saving, setSaving] = useState(false);
+  const [drafts, setDrafts] = useState<EntryDraft[]>([]);
+  const [candidateOptions, setCandidateOptions] = useState<Candidate[]>([]);
+  const [pollingUnitOptions, setPollingUnitOptions] = useState<PollingUnit[]>([]);
+  const [pollingUnitSearch, setPollingUnitSearch] = useState("");
+  const [optionsLoading, setOptionsLoading] = useState(false);
 
   const load = useCallback(async () => {
     if (!supabase) {
@@ -97,15 +144,15 @@ export function ResultsReviewWorkspace() {
     setError("");
     try {
       const [sheets, elections, pus, wards, lgas, states, extractions, entries, checks] = await Promise.all([
-        supabase.from("result_sheets").select("id,election_id,polling_unit_id,source_url,source_external_id,source_hash,mime_type,evidence_url,evidence_size_bytes,discovered_at,captured_at,processed_at,status,evidence_status,processing_attempts,last_error").order("processed_at", { ascending: false, nullsFirst: false }).limit(300),
+        supabase.from("result_sheets").select("id,election_id,polling_unit_id,source_url,source_external_id,source_hash,mime_type,evidence_url,evidence_size_bytes,discovered_at,captured_at,processed_at,status,evidence_status,processing_attempts,last_error,reviewed_at,reviewed_by,review_note").order("processed_at", { ascending: false, nullsFirst: false }).limit(1000),
         supabase.from("elections").select("id,name,election_type,election_date"),
-        supabase.from("polling_units").select("id,name,pu_code,ward_id"),
-        supabase.from("wards").select("id,name,lga_id"),
-        supabase.from("lgas").select("id,name,state_id"),
-        supabase.from("states").select("id,name"),
-        supabase.from("extractions").select("id,result_sheet_id,engine,engine_version,confidence,status,raw_output,created_at").order("created_at", { ascending: false }).limit(500),
-        supabase.from("result_entries").select("id,extraction_id,label,votes,raw_label,raw_value").limit(3000),
-        supabase.from("validation_checks").select("id,extraction_id,check_name,passed,severity,details,created_at").order("created_at", { ascending: false }).limit(3000)
+        supabase.from("polling_units").select("id,name,pu_code,ward_id").limit(1000),
+        supabase.from("wards").select("id,name,lga_id").limit(1000),
+        supabase.from("lgas").select("id,name,state_id").limit(1000),
+        supabase.from("states").select("id,name").limit(1000),
+        supabase.from("extractions").select("id,result_sheet_id,engine,engine_version,confidence,status,raw_output,created_at").order("created_at", { ascending: false }).limit(1000),
+        supabase.from("result_entries").select("id,extraction_id,candidate_id,label,votes,raw_label,raw_value").limit(5000),
+        supabase.from("validation_checks").select("id,extraction_id,check_name,passed,severity,details,created_at").order("created_at", { ascending: false }).limit(5000)
       ]);
 
       for (const result of [sheets, elections, pus, wards, lgas, states, extractions, entries, checks]) {
@@ -160,6 +207,34 @@ export function ResultsReviewWorkspace() {
     return () => window.clearInterval(timer);
   }, [load]);
 
+  useEffect(() => {
+    if (!selected || !supabase) return;
+    setDrafts(draftEntries(selected.entries));
+    setPollingUnitSearch(selected.pollingUnit?.pu_code || selected.pollingUnit?.name || "");
+    setPollingUnitOptions(selected.pollingUnit ? [selected.pollingUnit] : []);
+    setCandidateOptions([]);
+    setOptionsLoading(true);
+
+    void (async () => {
+      try {
+        const { data, error: candidateError } = await supabase
+          .from("candidates")
+          .select("id,name,ballot_order,party_id,parties(abbreviation,name)")
+          .eq("election_id", selected.election_id)
+          .order("ballot_order", { ascending: true, nullsFirst: false })
+          .order("name", { ascending: true })
+          .limit(1000);
+
+        if (candidateError) throw candidateError;
+        setCandidateOptions((data ?? []) as Candidate[]);
+      } catch (e) {
+        setError(e instanceof Error ? e.message : String(e));
+      } finally {
+        setOptionsLoading(false);
+      }
+    })();
+  }, [selected]);
+
   const elections = useMemo(() => {
     const map = new Map<string, string>();
     for (const row of rows) if (row.election) map.set(row.election.id, row.election.name);
@@ -172,16 +247,86 @@ export function ResultsReviewWorkspace() {
     return electionOk && statusOk;
   }), [rows, filter, electionFilter]);
 
-  async function review(action: "approve" | "reject") {
+  async function findPollingUnits() {
     if (!supabase || !selected) return;
-    setSaving(true);
+    const term = pollingUnitSearch.trim();
+    if (!term) {
+      setPollingUnitOptions(selected.pollingUnit ? [selected.pollingUnit] : []);
+      return;
+    }
+
+    setOptionsLoading(true);
+    setError("");
     try {
-      const result = await supabase.rpc("review_result_sheet", {
+      const [byCode, byName] = await Promise.all([
+        supabase.from("polling_units").select("id,name,pu_code,ward_id").ilike("pu_code", "%" + term + "%").limit(50),
+        supabase.from("polling_units").select("id,name,pu_code,ward_id").ilike("name", "%" + term + "%").limit(50)
+      ]);
+      if (byCode.error) throw byCode.error;
+      if (byName.error) throw byName.error;
+
+      const merged = new Map<string, PollingUnit>();
+      for (const item of [...(byCode.data ?? []), ...(byName.data ?? [])]) merged.set(item.id, item as PollingUnit);
+      if (selected.pollingUnit) merged.set(selected.pollingUnit.id, selected.pollingUnit);
+      setPollingUnitOptions([...merged.values()]);
+      if (!merged.size) setError("No polling unit matched that code or name.");
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setOptionsLoading(false);
+    }
+  }
+
+  function updateDraft(index: number, patch: Partial<EntryDraft>) {
+    setDrafts(current => current.map((entry, i) => i === index ? { ...entry, ...patch } : entry));
+  }
+
+  function addDraft() {
+    setDrafts(current => [...current, { candidate_id: null, label: "", votes: "", raw_label: "" }]);
+  }
+
+  function removeDraft(index: number) {
+    setDrafts(current => current.filter((_, i) => i !== index));
+  }
+
+  async function saveReview(action: "save" | "approve" | "reject") {
+    if (!supabase || !selected) return;
+
+    const selectedPu = pollingUnitOptions.find(item => item.id === selected.polling_unit_id) ??
+      pollingUnitOptions.find(item => item.id === (selected.pollingUnit?.id ?? ""));
+    if (!selectedPu) {
+      setError("Select the correct polling unit before saving or approving this result.");
+      return;
+    }
+
+    setSaving(true);
+    setError("");
+    try {
+      const entries = drafts.map(entry => ({
+        ...(entry.id ? { id: entry.id } : {}),
+        candidate_id: entry.candidate_id || null,
+        label: entry.label.trim(),
+        votes: entry.votes.trim() === "" ? null : Number(entry.votes),
+        raw_label: entry.raw_label.trim() || entry.label.trim()
+      }));
+
+      if (entries.some(entry => !entry.label)) {
+        throw new Error("Every candidate/result label must be filled in.");
+      }
+      if (entries.some(entry => entry.votes !== null && (!Number.isInteger(entry.votes) || entry.votes < 0))) {
+        throw new Error("Votes must be whole numbers greater than or equal to zero.");
+      }
+
+      const result = await supabase.rpc("save_result_review", {
         p_result_sheet_id: selected.id,
+        p_polling_unit_id: selectedPu.id,
+        p_entries: entries,
         p_action: action,
         p_note: reviewNote.trim() || null
       });
+
       if (result.error) throw result.error;
+
       setSelected(null);
       setReviewNote("");
       await load();
@@ -198,7 +343,7 @@ export function ResultsReviewWorkspace() {
         <div>
           <p className="text-xs font-medium uppercase tracking-[0.18em] text-zinc-500">Evidence control</p>
           <h1 className="mt-1 text-2xl font-semibold text-zinc-100">Review results</h1>
-          <p className="mt-1 max-w-2xl text-sm text-zinc-500">Every result with a processing failure, validation issue, low-confidence extraction, or pending review is surfaced here with its source and extraction evidence.</p>
+          <p className="mt-1 max-w-2xl text-sm text-zinc-500">Inspect the official source, correct OCR fields when necessary, map the polling unit, then approve the corrected result.</p>
         </div>
         <button type="button" onClick={() => void load()} className="rounded-xl border border-zinc-800 bg-zinc-900 px-4 py-2 text-xs font-medium text-zinc-300 hover:bg-zinc-800">Refresh</button>
       </header>
@@ -229,7 +374,7 @@ export function ResultsReviewWorkspace() {
       ) : (
         <div className="overflow-hidden rounded-3xl border border-zinc-800/70">
           {filtered.map(row => (
-            <button key={row.id} type="button" onClick={() => { setSelected(row); setReviewNote(""); }} className={"block w-full border-b border-zinc-800/60 p-5 text-left last:border-b-0 hover:bg-zinc-900/80 " + issueClass}>
+            <button key={row.id} type="button" onClick={() => { setSelected(row); setReviewNote(row.review_note ?? ""); }} className={"block w-full border-b border-zinc-800/60 p-5 text-left last:border-b-0 hover:bg-zinc-900/80 " + issueClass}>
               <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
                 <div className="min-w-0">
                   <div className="flex flex-wrap items-center gap-2">
@@ -252,61 +397,105 @@ export function ResultsReviewWorkspace() {
 
       {selected && (
         <div className="fixed inset-0 z-50 overflow-y-auto bg-black/70 p-4">
-          <div className="mx-auto my-6 max-w-6xl rounded-3xl border border-zinc-800 bg-zinc-950 shadow-2xl">
+          <div className="mx-auto my-6 max-w-7xl rounded-3xl border border-zinc-800 bg-zinc-950 shadow-2xl">
             <div className="flex items-start justify-between gap-4 border-b border-zinc-800 p-6">
               <div>
-                <p className="text-xs uppercase tracking-[0.18em] text-zinc-600">Result review</p>
-                <h2 className="mt-1 text-xl font-semibold text-zinc-100">{selected.pollingUnit?.name ?? "Unknown polling unit"}</h2>
-                <p className="mt-1 text-xs text-zinc-500">{selected.election?.name ?? "Unknown election"} · {selected.pollingUnit?.pu_code ?? "No PU code"}</p>
+                <p className="text-xs uppercase tracking-[0.18em] text-zinc-600">Result correction workspace</p>
+                <h2 className="mt-1 text-xl font-semibold text-zinc-100">{selected.election?.name ?? "Unknown election"}</h2>
+                <p className="mt-1 text-xs text-zinc-500">{selected.state?.name ?? "State unavailable"} · {selected.lga?.name ?? "LGA unavailable"} · {selected.ward?.name ?? "Ward unavailable"}</p>
               </div>
-              <button type="button" onClick={() => setSelected(null)} className="rounded-xl border border-zinc-800 px-3 py-2 text-xs text-zinc-400">Close</button>
+              <button type="button" onClick={() => setSelected(null)} className="rounded-xl border border-zinc-800 px-3 py-2 text-xs text-zinc-400"><X size={16}/></button>
             </div>
 
-            <div className="grid gap-5 p-6 lg:grid-cols-[1.4fr_1fr]">
+            <div className="grid gap-5 p-6 xl:grid-cols-[1.05fr_1.45fr]">
               <div className="space-y-5">
                 <div className="rounded-2xl border border-zinc-800 bg-zinc-900/50 p-5">
-                  <h3 className="text-sm font-semibold text-zinc-200">Source evidence</h3>
-                  <dl className="mt-4 grid gap-3 text-xs sm:grid-cols-2">
+                  <div className="flex items-center justify-between gap-3">
+                    <div><h3 className="text-sm font-semibold text-zinc-200">Official source</h3><p className="mt-1 text-xs text-zinc-600">Use the source itself as the authority for corrections.</p></div>
+                    <span className="rounded-full border border-zinc-800 bg-zinc-950 px-2 py-1 text-[10px] text-zinc-500">{selected.extraction ? Math.round((selected.extraction.confidence ?? 0) * 100) + "% OCR confidence" : "No extraction"}</span>
+                  </div>
+                  <dl className="mt-4 grid gap-3 text-xs">
                     <div><dt className="text-zinc-600">Source page</dt><dd className="mt-1 break-all text-zinc-300">{selected.source_url}</dd></div>
                     <div><dt className="text-zinc-600">Evidence asset</dt><dd className="mt-1 break-all text-zinc-300">{selected.evidence_url || "Not captured"}</dd></div>
                     <div><dt className="text-zinc-600">SHA-256</dt><dd className="mt-1 break-all text-zinc-300">{selected.source_hash || "Not recorded"}</dd></div>
-                    <div><dt className="text-zinc-600">Type / size</dt><dd className="mt-1 text-zinc-300">{selected.mime_type || "—"} · {bytes(selected.evidence_size_bytes)}</dd></div>
                   </dl>
-                  {selected.evidence_url && <a href={selected.evidence_url} target="_blank" rel="noreferrer" className="mt-4 inline-flex rounded-xl bg-zinc-100 px-4 py-2 text-xs font-semibold text-zinc-950">Open evidence</a>}
-                  <a href={selected.source_url} target="_blank" rel="noreferrer" className="ml-2 inline-flex rounded-xl border border-zinc-800 px-4 py-2 text-xs font-medium text-zinc-300">Open source page</a>
+                  <div className="mt-4 flex flex-wrap gap-2">
+                    {selected.evidence_url && <a href={selected.evidence_url} target="_blank" rel="noreferrer" className="inline-flex rounded-xl bg-zinc-100 px-4 py-2 text-xs font-semibold text-zinc-950">Open evidence</a>}
+                    <a href={selected.source_url} target="_blank" rel="noreferrer" className="inline-flex rounded-xl border border-zinc-800 px-4 py-2 text-xs font-medium text-zinc-300">Open source page</a>
+                  </div>
                 </div>
 
                 <div className="rounded-2xl border border-zinc-800 bg-zinc-900/50 p-5">
-                  <div className="flex items-center justify-between"><h3 className="text-sm font-semibold text-zinc-200">Extracted result</h3><span className="text-xs text-zinc-500">{selected.extraction ? Math.round((selected.extraction.confidence ?? 0) * 100) + "% confidence" : "No extraction"}</span></div>
-                  <div className="mt-4 overflow-hidden rounded-xl border border-zinc-800">
-                    <table className="w-full text-left text-xs"><thead className="bg-zinc-950 text-zinc-500"><tr><th className="p-3">Candidate / label</th><th className="p-3 text-right">Votes</th></tr></thead><tbody>{selected.entries.length ? selected.entries.map(entry => <tr key={entry.id} className="border-t border-zinc-800/60"><td className="p-3 text-zinc-300">{entry.label}</td><td className="p-3 text-right font-medium text-zinc-100">{entry.votes ?? "—"}</td></tr>) : <tr><td colSpan={2} className="p-4 text-zinc-600">No candidate entries were saved.</td></tr>}</tbody></table>
+                  <h3 className="text-sm font-semibold text-zinc-200">Polling unit identity</h3>
+                  <p className="mt-1 text-xs text-zinc-600">If OCR or discovery failed to map the polling unit, search the official/local geography and select the correct record.</p>
+                  <div className="mt-4 flex gap-2">
+                    <input value={pollingUnitSearch} onChange={e => setPollingUnitSearch(e.target.value)} onKeyDown={e => { if (e.key === "Enter") void findPollingUnits(); }} className={inputClass + " min-w-0 flex-1"} placeholder="PU code or polling unit name" />
+                    <button type="button" onClick={() => void findPollingUnits()} disabled={optionsLoading} className="inline-flex items-center gap-2 rounded-xl border border-zinc-800 bg-zinc-900 px-3 py-2 text-xs font-semibold text-zinc-200 disabled:opacity-50"><Search size={14}/> Find</button>
                   </div>
-                  {selected.extraction && <pre className="mt-4 max-h-56 overflow-auto rounded-xl bg-zinc-950 p-4 text-[11px] leading-5 text-zinc-500">{JSON.stringify(selected.extraction.raw_output, null, 2)}</pre>}
+                  <div className="mt-3 space-y-2">
+                    {pollingUnitOptions.map(pu => (
+                      <button key={pu.id} type="button" onClick={() => { setSelected(current => current ? { ...current, polling_unit_id: pu.id, pollingUnit: pu } : current); setPollingUnitSearch(pu.pu_code || pu.name); }} className={"w-full rounded-xl border p-3 text-left " + (selected.polling_unit_id === pu.id ? "border-zinc-500 bg-zinc-800" : "border-zinc-800 bg-zinc-950 hover:bg-zinc-900")}>
+                        <p className="text-xs font-medium text-zinc-200">{pu.name}</p>
+                        <p className="mt-1 text-[11px] text-zinc-500">{pu.pu_code || "No PU code"} · {selected.polling_unit_id === pu.id ? "Selected" : "Select this polling unit"}</p>
+                      </button>
+                    ))}
+                  </div>
+                </div>
+
+                <div className="rounded-2xl border border-zinc-800 bg-zinc-900/50 p-5">
+                  <h3 className="text-sm font-semibold text-zinc-200">Validation history</h3>
+                  <div className="mt-3 space-y-2">
+                    {selected.checks.length ? selected.checks.map(check => (
+                      <div key={check.id} className="rounded-xl border border-zinc-800 bg-zinc-950 p-3">
+                        <div className="flex items-center justify-between gap-3"><span className="text-xs text-zinc-300">{check.check_name.replaceAll("_", " ")}</span><span className={check.passed ? "text-emerald-400" : "text-red-400"}>{check.passed ? "Passed" : "Failed"}</span></div>
+                        <p className="mt-1 text-[11px] text-zinc-600">{check.severity}</p>
+                        {check.details && <pre className="mt-2 max-h-28 overflow-auto text-[10px] text-zinc-500">{JSON.stringify(check.details, null, 2)}</pre>}
+                      </div>
+                    )) : <p className="text-xs text-zinc-600">No validation checks were recorded.</p>}
+                  </div>
                 </div>
               </div>
 
               <div className="space-y-5">
                 <div className="rounded-2xl border border-zinc-800 bg-zinc-900/50 p-5">
-                  <h3 className="text-sm font-semibold text-zinc-200">Validation checks</h3>
-                  <div className="mt-3 space-y-2">{selected.checks.length ? selected.checks.map(check => <div key={check.id} className="rounded-xl border border-zinc-800 bg-zinc-950 p-3"><div className="flex items-center justify-between gap-3"><span className="text-xs text-zinc-300">{check.check_name.replaceAll("_", " ")}</span><span className={check.passed ? "text-emerald-400" : "text-red-400"}>{check.passed ? "Passed" : "Failed"}</span></div><p className="mt-1 text-[11px] text-zinc-600">{check.severity}</p>{check.details && <pre className="mt-2 overflow-auto text-[10px] text-zinc-500">{JSON.stringify(check.details, null, 2)}</pre>}</div>) : <p className="text-xs text-zinc-600">No validation checks were recorded.</p>}</div>
-                </div>
+                  <div className="flex items-start justify-between gap-4">
+                    <div><h3 className="text-sm font-semibold text-zinc-200">Correct extracted result</h3><p className="mt-1 text-xs text-zinc-600">Edit the OCR output to match the official source. Changes are written atomically and audited.</p></div>
+                    <button type="button" onClick={addDraft} className="inline-flex items-center gap-2 rounded-xl border border-zinc-800 bg-zinc-950 px-3 py-2 text-xs font-semibold text-zinc-300 hover:bg-zinc-900"><Plus size={14}/> Add row</button>
+                  </div>
 
-                <div className="rounded-2xl border border-zinc-800 bg-zinc-900/50 p-5">
-                  <h3 className="text-sm font-semibold text-zinc-200">Processing metadata</h3>
-                  <dl className="mt-3 grid gap-2 text-xs">{[
-                    ["Status", selected.status], ["Evidence", selected.evidence_status || "—"], ["Attempts", String(selected.processing_attempts ?? 0)], ["Discovered", formatDate(selected.discovered_at)], ["Captured", formatDate(selected.captured_at)], ["Processed", formatDate(selected.processed_at)]
-                  ].map(([k,v]) => <div key={k} className="flex justify-between gap-4"><dt className="text-zinc-600">{k}</dt><dd className="text-right text-zinc-300">{v}</dd></div>)}</dl>
-                  {selected.last_error && <div className="mt-4 rounded-xl border border-red-500/20 bg-red-500/5 p-3 text-xs text-red-300">{selected.last_error}</div>}
+                  <div className="mt-4 space-y-3">
+                    {drafts.length === 0 && <div className="rounded-xl border border-dashed border-zinc-800 p-6 text-center text-xs text-zinc-600">No candidate/result rows were extracted. Add the rows exactly as shown on the source.</div>}
+                    {drafts.map((entry, index) => (
+                      <div key={entry.id ?? "new-" + index} className="rounded-2xl border border-zinc-800 bg-zinc-950 p-4">
+                        <div className="grid gap-3 md:grid-cols-[1.1fr_1fr_130px_auto]">
+                          <input value={entry.label} onChange={e => updateDraft(index, { label: e.target.value })} className={inputClass} placeholder="Candidate / result label" />
+                          <select value={entry.candidate_id ?? ""} onChange={e => updateDraft(index, { candidate_id: e.target.value || null })} className={inputClass}>
+                            <option value="">No candidate mapping</option>
+                            {candidateOptions.map(candidate => <option key={candidate.id} value={candidate.id}>{candidate.party?.abbreviation ? candidate.party.abbreviation + " · " : ""}{candidate.name}</option>)}
+                          </select>
+                          <input value={entry.votes} onChange={e => updateDraft(index, { votes: e.target.value.replace(/[^0-9]/g, "") })} className={inputClass} inputMode="numeric" placeholder="Votes" />
+                          <button type="button" onClick={() => removeDraft(index)} className="grid place-items-center rounded-xl border border-red-500/20 bg-red-500/5 px-3 text-red-300 hover:bg-red-500/10" aria-label="Remove row"><Trash2 size={15}/></button>
+                        </div>
+                        <div className="mt-3">
+                          <label className="text-[10px] uppercase tracking-wide text-zinc-600">OCR/raw label</label>
+                          <input value={entry.raw_label} onChange={e => updateDraft(index, { raw_label: e.target.value })} className={inputClass + " mt-1 w-full"} placeholder="Original OCR label, e.g. L?" />
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+
+                  {selected.extraction && <details className="mt-4 rounded-xl border border-zinc-800 bg-zinc-950 p-3"><summary className="cursor-pointer text-xs text-zinc-500">View original OCR JSON</summary><pre className="mt-3 max-h-64 overflow-auto text-[10px] leading-5 text-zinc-600">{JSON.stringify(selected.extraction.raw_output, null, 2)}</pre></details>}
                 </div>
 
                 <div className="rounded-2xl border border-zinc-800 bg-zinc-900/50 p-5">
                   <h3 className="text-sm font-semibold text-zinc-200">Reviewer decision</h3>
-                  <textarea value={reviewNote} onChange={e => setReviewNote(e.target.value)} rows={4} className={inputClass + " mt-3 w-full resize-none"} placeholder="Add a review note or correction reason…" />
-                  <div className="mt-3 grid grid-cols-2 gap-2">
-                    <button disabled={saving} type="button" onClick={() => void review("reject")} className="rounded-xl border border-red-500/20 bg-red-500/10 px-3 py-2 text-xs font-semibold text-red-300 disabled:opacity-50">Reject</button>
-                    <button disabled={saving} type="button" onClick={() => void review("approve")} className="rounded-xl bg-zinc-100 px-3 py-2 text-xs font-semibold text-zinc-950 disabled:opacity-50">Approve</button>
+                  <textarea value={reviewNote} onChange={e => setReviewNote(e.target.value)} rows={4} className={inputClass + " mt-3 w-full resize-none"} placeholder="Explain any correction made, especially when OCR was wrong…" />
+                  <div className="mt-4 grid gap-2 sm:grid-cols-3">
+                    <button disabled={saving} type="button" onClick={() => void saveReview("save")} className="inline-flex items-center justify-center gap-2 rounded-xl border border-zinc-700 bg-zinc-900 px-3 py-3 text-xs font-semibold text-zinc-200 disabled:opacity-50"><Save size={14}/> Save corrections</button>
+                    <button disabled={saving} type="button" onClick={() => void saveReview("reject")} className="rounded-xl border border-red-500/20 bg-red-500/10 px-3 py-3 text-xs font-semibold text-red-300 disabled:opacity-50">Reject / send back</button>
+                    <button disabled={saving} type="button" onClick={() => void saveReview("approve")} className="inline-flex items-center justify-center gap-2 rounded-xl bg-zinc-100 px-3 py-3 text-xs font-semibold text-zinc-950 disabled:opacity-50"><CheckCircle2 size={14}/> {saving ? "Saving…" : "Approve corrected result"}</button>
                   </div>
-                  <p className="mt-2 text-[10px] text-zinc-600">Approval marks the sheet verified. Rejection sends it back to the processing/review path with the note retained.</p>
+                  <p className="mt-3 text-[10px] leading-5 text-zinc-600">Approve is only allowed after a real polling unit is selected and at least one result row is present. The corrected polling-unit identity and entries become the verified data used by result views and aggregates.</p>
                 </div>
               </div>
             </div>
