@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { portalAuthenticate, portalGetSession, portalIsAdmin, portalSignOut } from "../lib/supabase";
+import { portalAuthenticate, portalAuthListener, portalGetSession, portalIsAdmin, portalSignOut } from "../lib/supabase";
 
 export function AdminGate({ children }: { children: any }) {
   const [admin, setAdmin] = useState(false);
@@ -21,7 +21,7 @@ export function AdminGate({ children }: { children: any }) {
       setChecking(false);
     })();
 
-    const subscription = portalGetSession((_session) => {
+    const subscription = portalAuthListener((_session) => {
       if (!_session) {
         setAdmin(false);
         return;
