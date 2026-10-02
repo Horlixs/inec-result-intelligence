@@ -44,6 +44,14 @@ jobs:
       - name: Link Supabase project
         run: supabase link --project-ref "$SUPABASE_PROJECT_ID"
 
+      - name: Repair orphaned remote migration history
+        run: |
+          # The linked project contains 202610020003 in supabase_migrations.schema_migrations,
+          # but that migration was never committed to this repository. Repair only the
+          # tracking row; this does not execute or undo SQL, and allows the versioned
+          # migrations in this repository to continue in order.
+          supabase migration repair 202610020003 --status reverted
+
       - name: Apply database migrations
         run: supabase db push --include-all
 
