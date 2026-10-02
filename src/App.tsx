@@ -4,6 +4,7 @@ import { AdminGate } from "./components/AdminGate";
 import { ElectionDirectory } from "./components/ElectionDirectory";
 import { ElectionProfile } from "./components/ElectionProfile";
 import { RecentElections } from "./components/RecentElections";
+import { ResultsReviewWorkspace } from "./components/ResultsReviewWorkspace";
 import { AnalyticsWorkspace, CandidatesWorkspace, ResultsWorkspace } from "./components/WorkspacePages";
 
 function Placeholder({ title }: { title: string }) {
@@ -35,7 +36,7 @@ export default function App() {
   else if (pathname === "/analytics") page = <AnalyticsWorkspace />;
   else if (pathname === "/elections") page = <ElectionDirectory />;
   else if (electionId) page = <ElectionProfile selectedElectionId={electionId} detailOnly onElectionSelect={(id) => navigate("/elections/" + id + "/results")} onBackToElections={() => navigate("/elections")} />;
-  else if (pathname === "/view") page = <Placeholder title="Result review" />;
+  else if (pathname === "/review" || pathname === "/view") page = <ResultsReviewWorkspace />;
   else if (pathname === "/evidence") page = <Placeholder title="Result evidence" />;
   else if (pathname === "/sources") page = <Placeholder title="Data sources" />;
   else page = <Placeholder title="Page not found" />;
