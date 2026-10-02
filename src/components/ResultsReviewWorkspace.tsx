@@ -209,7 +209,7 @@ export function ResultsReviewWorkspace() {
         {[["issues", "All issues"], ["pending", "Pending review"], ["failed", "Failed"], ["processing", "Processing"]].map(([value, label]) => (
           <button key={value} type="button" onClick={() => setFilter(value)} className={"rounded-2xl border p-4 text-left " + (filter === value ? "border-zinc-600 bg-zinc-900" : "border-zinc-800/70 bg-zinc-900/40")}>
             <p className="text-xs text-zinc-500">{label}</p>
-            <p className="mt-1 text-xl font-semibold text-zinc-100">{value === "issues" ? rows.length : rows.filter(x => x.status === value === true).length}</p>
+            <p className="mt-1 text-xl font-semibold text-zinc-100">{value === "issues" ? rows.length : rows.filter(x => x.status === value).length}</p>
           </button>
         ))}
       </div>
