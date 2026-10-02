@@ -70,7 +70,7 @@ export async function portalIsAdmin(): Promise<boolean> {
 
 export function portalAuthListener(callback: (session: unknown) => void) {
   if (!supabase) return null;
-  return supabase.auth.onAuthStateChange((_event, session) => callback(session));
+  return supabase.auth.onAuthStateChange((_event, session) => callback(session)).data.subscription;
 }
 
 export async function portalSignOut() {
