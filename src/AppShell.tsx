@@ -9,7 +9,7 @@ const navigation = [
   { label: "Results", to: "/results", icon: ShieldCheck },
   { label: "Candidates", to: "/candidates", icon: Users },
   { label: "Analytics", to: "/analytics", icon: Activity },
-  { label: "Result evidence", to: "/evidence", icon: FileCheck2 },
+  { label: "Review results", to: "/view", icon: FileCheck2 },
   { label: "Data sources", to: "/sources", icon: Database },
 ];
 
