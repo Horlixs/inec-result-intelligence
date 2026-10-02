@@ -54,3 +54,25 @@ export async function portalAuthenticate(email: string, password: string): Promi
 
   return { ok: true };
 }
+
+
+export async function portalGetSession() {
+  if (!supabase) return null;
+  const result = await supabase.auth.getSession();
+  return result.data.session ?? null;
+}
+
+export async function portalIsAdmin(): Promise<boolean> {
+  if (!supabase) return false;
+  const result = await supabase.rpc("is_admin");
+  return !result.error && result.data === true;
+}
+
+export function portalAuthListener(callback: (session: unknown) => void) {
+  if (!supabase) return null;
+  return supabase.auth.onAuthStateChange((_event, session) => callback(session));
+}
+
+export async function portalSignOut() {
+  if (supabase) await supabase.auth.signOut();
+}
