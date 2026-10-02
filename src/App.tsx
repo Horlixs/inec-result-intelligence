@@ -1,5 +1,4 @@
 import { useEffect, useState } from "react";
-import type { FormEvent } from "react";
 import { supabase } from "./lib/supabase";
 import { AppShell } from "./AppShell";
 import { ElectionDirectory } from "./components/ElectionDirectory";
@@ -25,8 +24,7 @@ function AdminPortal({ children }: { children: any }) {
     });
   }, []);
 
-  async function authenticate(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault();
+  async function authenticate() {
     if (!supabase) return;
     setError("");
     const existing = await supabase.auth.signInWithPassword({ email: email.trim(), password });
@@ -66,13 +64,13 @@ function AdminPortal({ children }: { children: any }) {
   if (admin) return <>{children}<button type="button" onClick={() => void signOut()} className="fixed bottom-5 right-5 z-[60] rounded-xl border border-zinc-800 bg-zinc-950 px-3 py-2 text-xs text-zinc-300 shadow-xl">Sign out</button></>;
 
   return <main className="grid min-h-screen place-items-center bg-[#07090d] px-4 text-zinc-100">
-    <form onSubmit={authenticate} className="w-full max-w-md rounded-3xl border border-zinc-800 bg-zinc-900/80 p-7 shadow-2xl">
+    <div className="w-full max-w-md rounded-3xl border border-zinc-800 bg-zinc-900/80 p-7 shadow-2xl">
       <div className="mb-7"><p className="font-display text-xl font-semibold">INEC Intelligence</p><p className="mt-2 text-xs leading-5 text-zinc-500">Enter the administrator credentials to access the portal.</p></div>
       <label className="block"><span className="mb-2 block text-xs text-zinc-400">Email</span><input type="email" autoComplete="username" value={email} onChange={e => setEmail(e.target.value)} required className="w-full rounded-xl border border-zinc-800 bg-zinc-950 px-3.5 py-3 text-sm outline-none" /></label>
       <label className="mt-4 block"><span className="mb-2 block text-xs text-zinc-400">Password</span><input type="password" autoComplete="current-password" value={password} onChange={e => setPassword(e.target.value)} required className="w-full rounded-xl border border-zinc-800 bg-zinc-950 px-3.5 py-3 text-sm outline-none" /></label>
       {error && <p className="mt-4 rounded-xl border border-red-500/20 bg-red-500/5 p-3 text-xs leading-5 text-red-300">{error}</p>}
-      <button type="submit" className="mt-5 w-full rounded-xl bg-zinc-100 px-4 py-3 text-sm font-semibold text-zinc-950">Continue</button>
-    </form>
+      <button type="button" onClick={() => void authenticate()} className="mt-5 w-full rounded-xl bg-zinc-100 px-4 py-3 text-sm font-semibold text-zinc-950">Continue</button>
+    </div>
   </main>;
 }
 
