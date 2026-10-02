@@ -123,9 +123,12 @@ $$;
 revoke all on function public.release_pipeline_worker_lease(text) from public, anon, authenticated;
 grant execute on function public.release_pipeline_worker_lease(text) to service_role;
 
+-- The result-processing watchdog runs every 3 minutes. Keep the existing
+-- refresh schedule at its database-enforced minimum of 5 minutes; the
+-- watchdog independently drains queued work every 3 minutes.
 update public.pipeline_schedule
 set
-  interval_minutes = 3,
+  interval_minutes = 5,
   next_run_at = least(next_run_at, now()),
   updated_at = now()
 where name = 'irev-refresh';
