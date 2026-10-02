@@ -40,7 +40,6 @@ $$;
 revoke all on function public.get_irev_cron_secret() from public, anon, authenticated;
 grant execute on function public.get_irev_cron_secret() to service_role;
 
--- Keep the application's own schedule metadata aligned with the actual heartbeat.
 update public.pipeline_schedule
 set
   interval_minutes = 5,
@@ -48,13 +47,10 @@ set
   updated_at = now()
 where name = 'irev-refresh';
 
--- The job is intentionally a no-op until the deployment workflow has populated
--- project_url and pipeline_cron_key in Vault. This keeps the migration safe on
--- first deployment while making the cron definition durable.
 select cron.schedule(
   'irev-pipeline-watchdog',
   '*/5 * * * *',
-  $$
+  $cron$
     with cfg as (
       select
         max(decrypted_secret) filter (where name = 'project_url') as project_url,
@@ -77,5 +73,5 @@ select cron.schedule(
     where cfg.project_url is not null
       and cfg.pipeline_key is not null
       and cfg.cron_secret is not null;
-  $$
+  $cron$
 );
