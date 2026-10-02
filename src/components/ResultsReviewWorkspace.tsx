@@ -123,6 +123,8 @@ export function ResultsReviewWorkspace() {
   const [reviewNote, setReviewNote] = useState("");
   const [saving, setSaving] = useState(false);
   const [drafts, setDrafts] = useState<EntryDraft[]>([]);
+  const [removedEntryIds, setRemovedEntryIds] = useState<string[]>([]);
+  const [selectedPollingUnitId, setSelectedPollingUnitId] = useState<string | null>(null);
   const [candidateOptions, setCandidateOptions] = useState<Candidate[]>([]);
   const [pollingUnitOptions, setPollingUnitOptions] = useState<PollingUnit[]>([]);
   const [pollingUnitSearch, setPollingUnitSearch] = useState("");
@@ -205,6 +207,8 @@ export function ResultsReviewWorkspace() {
   useEffect(() => {
     if (!selected || !supabase) return;
     setDrafts(draftEntries(selected.entries));
+    setRemovedEntryIds([]);
+    setSelectedPollingUnitId(selected.polling_unit_id);
     setPollingUnitSearch(selected.pollingUnit?.pu_code || selected.pollingUnit?.name || "");
     setPollingUnitOptions(selected.pollingUnit ? [selected.pollingUnit] : []);
     setCandidateOptions([]);
@@ -281,14 +285,18 @@ export function ResultsReviewWorkspace() {
   }
 
   function removeDraft(index: number) {
-    setDrafts(current => current.filter((_, i) => i !== index));
+    setDrafts(current => {
+      const removed = current[index]?.id;
+      if (removed) setRemovedEntryIds(ids => ids.includes(removed) ? ids : [...ids, removed]);
+      return current.filter((_, i) => i !== index);
+    });
   }
 
   async function saveReview(action: "save" | "approve" | "reject") {
     if (!supabase || !selected) return;
 
-    const selectedPu = pollingUnitOptions.find(item => item.id === selected.polling_unit_id) ??
-      pollingUnitOptions.find(item => item.id === (selected.pollingUnit?.id ?? ""));
+    const selectedPu = pollingUnitOptions.find(item => item.id === selectedPollingUnitId) ??
+      (selected.pollingUnit?.id === selectedPollingUnitId ? selected.pollingUnit : null);
     if (!selectedPu) {
       setError("Select the correct polling unit before saving or approving this result.");
       return;
@@ -317,7 +325,8 @@ export function ResultsReviewWorkspace() {
         p_polling_unit_id: selectedPu.id,
         p_entries: entries,
         p_action: action,
-        p_note: reviewNote.trim() || null
+        p_note: reviewNote.trim() || null,
+        p_removed_entry_ids: removedEntryIds
       });
 
       if (result.error) throw result.error;
@@ -429,9 +438,9 @@ export function ResultsReviewWorkspace() {
                   </div>
                   <div className="mt-3 space-y-2">
                     {pollingUnitOptions.map(pu => (
-                      <button key={pu.id} type="button" onClick={() => { setSelected(current => current ? { ...current, polling_unit_id: pu.id, pollingUnit: pu } : current); setPollingUnitSearch(pu.pu_code || pu.name); }} className={"w-full rounded-xl border p-3 text-left " + (selected.polling_unit_id === pu.id ? "border-zinc-500 bg-zinc-800" : "border-zinc-800 bg-zinc-950 hover:bg-zinc-900")}>
+                      <button key={pu.id} type="button" onClick={() => { setSelected(current => current ? { ...current, polling_unit_id: pu.id, pollingUnit: pu } : current); setSelectedPollingUnitId(pu.id); setPollingUnitSearch(pu.pu_code || pu.name); }} className={"w-full rounded-xl border p-3 text-left " + (selectedPollingUnitId === pu.id ? "border-zinc-500 bg-zinc-800" : "border-zinc-800 bg-zinc-950 hover:bg-zinc-900")}>
                         <p className="text-xs font-medium text-zinc-200">{pu.name}</p>
-                        <p className="mt-1 text-[11px] text-zinc-500">{pu.pu_code || "No PU code"} · {selected.polling_unit_id === pu.id ? "Selected" : "Select this polling unit"}</p>
+                        <p className="mt-1 text-[11px] text-zinc-500">{pu.pu_code || "No PU code"} · {selectedPollingUnitId === pu.id ? "Selected" : "Select this polling unit"}</p>
                       </button>
                     ))}
                   </div>
