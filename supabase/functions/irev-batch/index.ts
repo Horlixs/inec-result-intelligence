@@ -338,8 +338,36 @@ async function refreshHeartbeat(extra: Record<string, unknown> = {}) {
 Deno.serve(async request => {
   if (request.method === "OPTIONS") return new Response(null, { status: 204, headers: CORS });
   if (request.method !== "POST") return json({ ok: false, error: "POST required" }, 405);
-  const started = Date.now(); const runId = WORKER_ID; let wardProcessed = 0; let wardFailed = 0; let sheetProcessed = 0; let sheetFailed = 0; let queued = 0; const sheetDiagnostics: Array<Record<string, unknown>> = [];
+  const started = Date.now(); const runId = WORKER_ID; let leaseAcquired = false; let wardProcessed = 0; let wardFailed = 0; let sheetProcessed = 0; let sheetFailed = 0; let queued = 0; const sheetDiagnostics: Array<Record<string, unknown>> = [];
   try {
+    let mode: "scheduled" | "manual" = "scheduled";
+    try {
+      const payload = await request.json();
+      if (payload?.trigger === "manual" || payload?.mode === "manual") mode = "manual";
+    } catch {}
+
+    const { data: lease, error: leaseError } = await supabase.rpc("acquire_pipeline_worker_lease", {
+      p_worker_id: WORKER_ID,
+      p_mode: mode,
+    });
+    if (leaseError) throw leaseError;
+    if (!lease?.[0]?.acquired) {
+      await updateHeartbeat({
+        status: "waiting",
+        last_error: lease?.[0]?.manual_requested
+          ? "Manual pipeline run has priority; scheduled worker skipped."
+          : "Another pipeline worker is active; scheduled worker skipped.",
+      });
+      return json({
+        ok: true,
+        busy: true,
+        skipped: true,
+        mode,
+        reason: lease?.[0]?.manual_requested ? "manual_run_active_or_requested" : "worker_already_active",
+      });
+    }
+    leaseAcquired = true;
+
     await updateHeartbeat({ status: "running", run_id: runId, last_worker_started: new Date().toISOString(), last_error: null, jobs_processed_last_run: 0, jobs_failed_last_run: 0 });
     await refreshHeartbeat();
     const wardDiagnostics: Array<Record<string, unknown>> = [];
@@ -406,7 +434,7 @@ Deno.serve(async request => {
       jobs_failed_last_run: sheetFailed,
       last_error: sheetFailed > 0 ? (sheetDiagnostics.find(x => x.error)?.error as string ?? null) : null,
     }) ?? { total: 0, ward_jobs: 0, sheet_jobs: 0 };
-    return json({ ok: true, run_id: runId, queued, processed: sheetProcessed, failed: sheetFailed, ward_jobs: { processed: wardProcessed, failed: wardFailed }, ward_diagnostics: wardDiagnostics, sheet_diagnostics: sheetDiagnostics, remaining: remaining.total, remaining_ward_jobs: remaining.ward_jobs, remaining_sheet_jobs: remaining.sheet_jobs, max_ward_jobs: MAX_WARD_JOBS, max_sheet_jobs: MAX_SHEET_JOBS, concurrent_sheet_jobs: CONCURRENT_SHEET_JOBS, rate_limited: rateLimited, elapsed_ms: Date.now() - started });
+    return json({ ok: true, run_id: runId, mode: mode, queued, processed: sheetProcessed, failed: sheetFailed, ward_jobs: { processed: wardProcessed, failed: wardFailed }, ward_diagnostics: wardDiagnostics, sheet_diagnostics: sheetDiagnostics, remaining: remaining.total, remaining_ward_jobs: remaining.ward_jobs, remaining_sheet_jobs: remaining.sheet_jobs, max_ward_jobs: MAX_WARD_JOBS, max_sheet_jobs: MAX_SHEET_JOBS, concurrent_sheet_jobs: CONCURRENT_SHEET_JOBS, rate_limited: rateLimited, elapsed_ms: Date.now() - started });
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     await updateHeartbeat({
@@ -418,5 +446,10 @@ Deno.serve(async request => {
       jobs_failed_last_run: sheetFailed,
     });
     return json({ ok: false, run_id: runId, error: message, ward_jobs: { processed: wardProcessed, failed: wardFailed }, processed: sheetProcessed, failed: sheetFailed }, 500);
+  } finally {
+    if (leaseAcquired) {
+      const { error } = await supabase.rpc("release_pipeline_worker_lease", { p_worker_id: WORKER_ID });
+      if (error) console.error("pipeline worker lease release failed:", error.message);
+    }
   }
 });
