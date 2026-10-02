@@ -39,12 +39,6 @@ function AdminPortal({ children }: { children: any }) {
       return;
     }
 
-    const { data: bootstrap } = await supabase.rpc("can_bootstrap_admin");
-    if (!bootstrap) {
-      setError(existing.error.message);
-      return;
-    }
-
     const created = await supabase.auth.signUp({ email: email.trim(), password });
     if (created.error) { setError(created.error.message); return; }
     if (!created.data.session) {
