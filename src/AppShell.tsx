@@ -2,6 +2,7 @@ import { Activity, BarChart3, Database, FileCheck2, LayoutDashboard, Menu, Refre
 import { useState } from "react";
 import { PipelineRunner } from "./components/PipelineRunner";
 import { SystemValidator } from "./components/SystemValidator";
+import { portalSignOut } from "./lib/supabase";
 
 const navigation = [
   { label: "Overview", to: "/" , icon: LayoutDashboard },
@@ -42,6 +43,7 @@ export function AppShell({ pathname, onNavigate, children }: AppShellProps) {
           <div className="mt-auto space-y-1">
             <div className="mb-4 rounded-2xl border border-zinc-800/60 bg-zinc-900/60 p-4"><div className="flex items-center gap-2 text-xs font-medium text-zinc-300"><Sparkles size={14}/> Intelligence layer</div><p className="mt-2 text-xs leading-5 text-zinc-500">Official-source discovery, extraction and validation in one workspace.</p></div>
             <button className="flex w-full items-center gap-3 rounded-xl px-3 py-2.5 text-sm text-zinc-500 hover:bg-zinc-900 hover:text-zinc-200"><Settings2 size={17}/> Settings</button>
+            <button type="button" onClick={() => void portalSignOut()} className="flex w-full items-center gap-3 rounded-xl px-3 py-2.5 text-sm text-zinc-500 hover:bg-zinc-900 hover:text-zinc-200"><ShieldCheck size={17}/> Sign out</button>
           </div>
         </div>
       </aside>
