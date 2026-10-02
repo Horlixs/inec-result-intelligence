@@ -52,10 +52,31 @@ jobs:
           test -n "$PIPELINE_KEY"
 
           PROJECT_URL="https://${SUPABASE_PROJECT_ID}.supabase.co"
-          SQL="do \\$\$\n          declare\n            project_url_id uuid;\n            pipeline_key_id uuid;\n          begin\n            select id into project_url_id from vault.decrypted_secrets where name = 'project_url' limit 1;\n            if project_url_id is null then\n              perform vault.create_secret('${PROJECT_URL}', 'project_url', 'Supabase project URL used by the IReV watchdog.');\n            else\n              perform vault.update_secret(project_url_id, '${PROJECT_URL}', 'project_url', 'Supabase project URL used by the IReV watchdog.');\n            end if;\n\n            select id into pipeline_key_id from vault.decrypted_secrets where name = 'pipeline_cron_key' limit 1;\n            if pipeline_key_id is null then\n              perform vault.create_secret('${PIPELINE_KEY}', 'pipeline_cron_key', 'API key used only by the internal IReV watchdog cron.');\n            else\n              perform vault.update_secret(pipeline_key_id, '${PIPELINE_KEY}', 'pipeline_cron_key', 'API key used only by the internal IReV watchdog cron.');\n            end if;\n          end\n          \\$\$;"
 
-          supabase db query --linked "$SQL"
+          cat > /tmp/configure-watchdog-vault.sql <<SQL
+          do \$\$
+          declare
+            project_url_id uuid;
+            pipeline_key_id uuid;
+          begin
+            select id into project_url_id from vault.decrypted_secrets where name = 'project_url' limit 1;
+            if project_url_id is null then
+              perform vault.create_secret('${PROJECT_URL}', 'project_url', 'Supabase project URL used by the IReV watchdog.');
+            else
+              perform vault.update_secret(project_url_id, '${PROJECT_URL}', 'project_url', 'Supabase project URL used by the IReV watchdog.');
+            end if;
 
+            select id into pipeline_key_id from vault.decrypted_secrets where name = 'pipeline_cron_key' limit 1;
+            if pipeline_key_id is null then
+              perform vault.create_secret('${PIPELINE_KEY}', 'pipeline_cron_key', 'API key used only by the internal IReV watchdog cron.');
+            else
+              perform vault.update_secret(pipeline_key_id, '${PIPELINE_KEY}', 'pipeline_cron_key', 'API key used only by the internal IReV watchdog cron.');
+            end if;
+          end
+          \$\$;
+          SQL
+
+          supabase db query --linked --file /tmp/configure-watchdog-vault.sql
       - name: Deploy Edge Functions
         run: supabase functions deploy --project-ref "$SUPABASE_PROJECT_ID"
 
