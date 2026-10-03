@@ -4,7 +4,9 @@ import { supabase } from "../lib/supabase";
 
 interface PipelineRunnerProps {}
 interface SyncResponse { ok?: boolean; error?: string; discovered?: number; }
-interface BatchResponse { ok?: boolean; error?: string; processed?: number; failed?: number; remaining?: number; ward_jobs?: { processed?: number; failed?: number }; }
+interface BatchResponse { ok?: boolean; error?: unknown; processed?: number; failed?: number; remaining?: number; ward_jobs?: { processed?: number; failed?: number }; processing_delegated?: boolean; }
+
+function errorText(value: unknown): string { if (value instanceof Error) return value.message; if (typeof value === "string") return value; if (value && typeof value === "object") { const record = value as Record<string, unknown>; if (typeof record.message === "string") return record.message; if (typeof record.error === "string") return record.error; try { return JSON.stringify(value); } catch { return "The pipeline returned an unreadable error."; } } return String(value ?? "The pipeline could not be completed."); }
 
 export function PipelineRunner(_props: PipelineRunnerProps) {
   const [running, setRunning] = useState(false);
@@ -14,7 +16,7 @@ export function PipelineRunner(_props: PipelineRunnerProps) {
   async function post(path: string, body: unknown) {
     const response = await fetch(path, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
     const data = await response.json().catch(() => ({}));
-    if (!response.ok || !data?.ok) throw new Error(data?.error ?? `Request failed with HTTP ${response.status}.`);
+    if (!response.ok || !data?.ok) throw new Error(errorText(data?.error) || `Request failed with HTTP ${response.status}.`);
     return data as BatchResponse;
   }
 
@@ -26,30 +28,14 @@ export function PipelineRunner(_props: PipelineRunnerProps) {
       const discovery = await discoveryResponse.json() as SyncResponse;
       if (!discoveryResponse.ok || !discovery?.ok) throw new Error(discovery?.error ?? `Discovery failed with HTTP ${discoveryResponse.status}.`);
 
-      let remaining = Number.POSITIVE_INFINITY;
-      let batchNumber = 0;
-      let wards = 0;
-      let sheets = 0;
-      let failures = 0;
-      setMessage(`Discovery complete — ${discovery.discovered ?? 0} elections found. Processing in bounded batches…`);
-
-      while (remaining > 0) {
-        batchNumber++;
-        const batch = await post("/api/irev-batch", {});
-        const wardCount = batch.ward_jobs?.processed ?? 0;
-        const sheetCount = batch.processed ?? 0;
-        wards += wardCount;
-        sheets += sheetCount;
-        failures += batch.failed ?? 0;
-        remaining = batch.remaining ?? 0;
-        setMessage(`Batch ${batchNumber}: ${wardCount} wards + ${sheetCount} result sheets processed. ${remaining} jobs remaining${failures ? `, ${failures} failed/retried` : ""}.`);
-        if (wardCount === 0 && sheetCount === 0 && remaining > 0) throw new Error("The queue still contains jobs, but this batch made no progress. Check the pipeline logs.");
-      }
-
-      setMessage(`Pipeline complete — ${wards} ward jobs and ${sheets} result-sheet jobs processed.`);
-      setError(failures > 0);
+      const batch = await post("/api/irev-batch", {});
+      const wardCount = batch.ward_jobs?.processed ?? 0;
+      const remaining = batch.remaining ?? 0;
+      const sheetQueue = batch.remaining ?? 0;
+      setMessage(`Discovery complete — ${discovery.discovered ?? 0} elections found. ${wardCount} ward jobs synchronized; ${sheetQueue} result-processing jobs are queued for the PaddleOCR worker.`);
+      setError((batch.ward_jobs?.failed ?? 0) > 0);
     } catch (caught: unknown) {
-      setError(true); setMessage(caught instanceof Error ? caught.message : "The pipeline could not be completed.");
+      setError(true); setMessage(errorText(caught));
     } finally { setRunning(false); }
   }
 
