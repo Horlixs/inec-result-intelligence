@@ -77,16 +77,28 @@ def download_source(sheet: dict) -> tuple[bytes, str, str]:
     url = sheet.get("evidence_url") or sheet.get("source_url")
     if not url:
         raise RuntimeError("Result sheet has no evidence/source URL")
-    response = requests.get(
-        url,
-        headers={
-            "User-Agent": "INEC-Result-Intelligence/1.0 paddle-ocr-worker",
-            "Accept": "image/avif,image/webp,image/apng,image/svg+xml,image/*,application/pdf,text/html;q=0.8,*/*;q=0.5",
-            "Referer": "https://inecelectionresults.ng/",
-        },
-        timeout=45,
-    )
-    response.raise_for_status()
+    headers = {
+        "User-Agent": "INEC-Result-Intelligence/1.0 paddle-ocr-worker",
+        "Accept": "image/avif,image/webp,image/apng,image/svg+xml,image/*,application/pdf,text/html;q=0.8,*/*;q=0.5",
+        "Referer": "https://inecelectionresults.ng/",
+    }
+    response = None
+    last_error = None
+    for attempt in range(1, 5):
+        try:
+            candidate = requests.get(url, headers=headers, timeout=45)
+            if candidate.ok:
+                response = candidate
+                break
+            last_error = f"IReV HTTP {candidate.status_code}: {candidate.text[:1000]}"
+            if candidate.status_code not in {408, 425, 429, 500, 502, 503, 504}:
+                candidate.raise_for_status()
+        except requests.RequestException as exc:
+            last_error = str(exc)
+        if attempt < 4:
+            time.sleep(2 ** (attempt - 1))
+    if response is None:
+        raise RuntimeError(last_error or "IReV source request failed")
     content = response.content
     mime = (response.headers.get("content-type") or "").split(";")[0].lower()
 
