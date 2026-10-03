@@ -67,3 +67,5 @@ jobs:
 
       - name: Process one queued result sheet
         run: python scripts/paddle_ocr_worker.py
+
+# Verification trigger: run against the latest database migration.
