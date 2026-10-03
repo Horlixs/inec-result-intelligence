@@ -1,6 +1,9 @@
 name: PaddleOCR Result Worker
 
 on:
+  push:
+    paths:
+      - ".github/workflows/paddle-ocr-worker.yml"
   schedule:
     - cron: "*/3 * * * *"
   workflow_dispatch:
