@@ -30,7 +30,6 @@ export function PipelineRunner(_props: PipelineRunnerProps) {
 
       const batch = await post("/api/irev-batch", {});
       const wardCount = batch.ward_jobs?.processed ?? 0;
-      const remaining = batch.remaining ?? 0;
       const sheetQueue = batch.remaining ?? 0;
       setMessage(`Discovery complete — ${discovery.discovered ?? 0} elections found. ${wardCount} ward jobs synchronized; ${sheetQueue} result-processing jobs are queued for the PaddleOCR worker.`);
       setError((batch.ward_jobs?.failed ?? 0) > 0);
