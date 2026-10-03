@@ -7,7 +7,9 @@
 -- overload for the worker. The worker remains service-role only, and the
 -- existing database retry/locking rules stay authoritative.
 
-create or replace function public.claim_result_processing_job(
+drop function if exists public.claim_result_processing_job(text, integer, text);
+
+create function public.claim_result_processing_job(
   p_worker_id text,
   p_max_attempts integer,
   p_engine text
