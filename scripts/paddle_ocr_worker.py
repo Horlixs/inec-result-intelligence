@@ -73,10 +73,103 @@ def finish_job(job_id: str, attempts: int, ok: bool, error: str | None = None):
         )
 
 
+def resolve_live_irev_source(sheet: dict) -> str | None:
+    source = str(sheet.get("source_url") or "").strip()
+    if not source or "inecelectionresults.ng/elections/" not in source or "/pu/" not in source:
+        return None
+    match = re.search(r"/elections/([^/]+)/pu/([^/]+)/document", source)
+    if not match:
+        return None
+    election_external_id, route_pu_id = match.group(1), match.group(2)
+
+    pu_rows = rest(
+        f"polling_units?id=eq.{sheet['polling_unit_id']}&select=external_id,ward_id,irev_pu_id,pu_code,name"
+    )
+    if not pu_rows:
+        return None
+    pu = pu_rows[0]
+    ward_rows = rest(
+        f"wards?id=eq.{pu['ward_id']}&select=irev_ward_oid,irev_ward_id"
+    )
+    if not ward_rows or not ward_rows[0].get("irev_ward_oid"):
+        return None
+    ward_oid = str(ward_rows[0]["irev_ward_oid"])
+
+    headers = {
+        "User-Agent": "INEC-Result-Intelligence/1.0 paddle-ocr-worker",
+        "Accept": "application/json, text/plain, */*",
+        "Origin": "https://inecelectionresults.ng",
+        "Referer": "https://inecelectionresults.ng/",
+    }
+    response = requests.get(
+        f"https://dolphin-app-sleqh.ondigitalocean.app/api/v1/elections/{requests.utils.quote(election_external_id, safe='')}/pus",
+        params={"ward": ward_oid},
+        headers=headers,
+        timeout=30,
+    )
+    response.raise_for_status()
+    payload = response.json()
+    rows = payload if isinstance(payload, list) else payload.get("data", []) if isinstance(payload, dict) else []
+    if not isinstance(rows, list):
+        return None
+
+    target_external = str(pu.get("external_id") or "").strip()
+    target_code = str(pu.get("pu_code") or "").strip().lower()
+    target_name = re.sub(r"\s+", " ", str(pu.get("name") or "").strip().lower())
+    target_numeric = int(pu["irev_pu_id"]) if str(pu.get("irev_pu_id") or "").isdigit() else None
+
+    def inspect(value):
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+        if isinstance(value, dict):
+            for key in ("url", "document_url", "file_url", "src", "path", "href"):
+                found = inspect(value.get(key))
+                if found:
+                    return found
+            for key in ("document", "result", "result_sheet", "file"):
+                found = inspect(value.get(key))
+                if found:
+                    return found
+        return None
+
+    for row in rows:
+        nested = row.get("polling_unit") if isinstance(row.get("polling_unit"), dict) else {}
+        ids = [str(row.get(k) or "").strip() for k in ("polling_unit_oid", "external_id", "_id")]
+        ids += [str(nested.get(k) or "").strip() for k in ("_id", "external_id")]
+        numeric = row.get("pu_id", row.get("polling_unit_id", row.get("id", nested.get("polling_unit_id"))))
+        try:
+            numeric = int(numeric)
+        except (TypeError, ValueError):
+            numeric = None
+        code = str(row.get("pu_code") or nested.get("pu_code") or row.get("code") or nested.get("code") or "").strip().lower()
+        name = re.sub(r"\s+", " ", str(row.get("name") or row.get("polling_unit_name") or nested.get("name") or "").strip().lower())
+        if (
+            route_pu_id in ids or target_external in ids or
+            (target_numeric is not None and numeric == target_numeric) or
+            (target_code and code and target_code == code) or
+            (target_name and name and target_name == name)
+        ):
+            document = inspect(row.get("document") or row.get("result") or row.get("result_sheet") or row.get("file") or row)
+            if document and document.startswith(("http://", "https://")):
+                return document
+    return None
+
+
 def download_source(sheet: dict) -> tuple[bytes, str, str]:
     url = sheet.get("evidence_url") or sheet.get("source_url")
     if not url:
         raise RuntimeError("Result sheet has no evidence/source URL")
+
+    # Legacy docs.inecelectionresults.net assets can be unreachable even when
+    # the live IReV API still exposes the polling-unit document URL. Resolve
+    # the live document directly before attempting the legacy asset.
+    if "inecelectionresults.net" in str(url).lower():
+        try:
+            live_url = resolve_live_irev_source(sheet)
+            if live_url:
+                url = live_url
+        except Exception as exc:
+            print(json.dumps({"source_resolution_warning": str(exc)}))
     headers = {
         "User-Agent": "INEC-Result-Intelligence/1.0 paddle-ocr-worker",
         "Accept": "image/avif,image/webp,image/apng,image/svg+xml,image/*,application/pdf,text/html;q=0.8,*/*;q=0.5",
