@@ -1,0 +1,53 @@
+name: PaddleOCR Result Worker
+
+on:
+  schedule:
+    - cron: "*/3 * * * *"
+  workflow_dispatch:
+  workflow_run:
+    workflows: ["IReV OCR Drain"]
+    types: [completed]
+
+concurrency:
+  group: paddle-ocr-result-worker
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  process:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+      SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+      GOOGLE_GENERATIVE_AI_API_KEY: ${{ secrets.GOOGLE_GENERATIVE_AI_API_KEY }}
+      PADDLE_PDX_MODEL_SOURCE: BOS
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Validate worker secrets
+        run: |
+          test -n "$SUPABASE_URL"
+          test -n "$SUPABASE_SERVICE_ROLE_KEY"
+          test -n "$GOOGLE_GENERATIVE_AI_API_KEY"
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: requirements-paddleocr.txt
+
+      - name: Install PaddleOCR CPU runtime
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install paddlepaddle==3.2.0 -i https://www.paddlepaddle.org.cn/packages/stable/cpu/
+          python -m pip install -r requirements-paddleocr.txt
+
+      - name: Process one queued result sheet
+        run: python scripts/paddle_ocr_worker.py
