@@ -39,7 +39,7 @@ export function PipelineRunner(_props: PipelineRunnerProps) {
   }
 
   return (
-    <div className="fixed top-20 left-4 right-4 z-[60] sm:top-[4.5rem] sm:left-auto sm:right-6 sm:w-auto">
+    <div className="fixed bottom-4 left-4 z-[60] sm:bottom-6 lg:left-[18rem]">
       {message && <div className="mb-3 flex w-[min(24rem,calc(100vw-2rem))] items-start gap-3 rounded-2xl border border-zinc-800/60 bg-zinc-950/95 p-4 text-xs leading-5 text-zinc-300 shadow-2xl shadow-black/40 backdrop-blur-xl">
         {error ? <XCircle className="mt-0.5 shrink-0 text-red-400" size={16} /> : !running ? <CheckCircle2 className="mt-0.5 shrink-0 text-emerald-400" size={16} /> : <Loader2 className="mt-0.5 shrink-0 animate-spin text-zinc-400" size={16} />}
         <span>{message}</span>
