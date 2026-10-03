@@ -8,7 +8,7 @@ on:
     - cron: "*/3 * * * *"
   workflow_dispatch:
   workflow_run:
-    workflows: ["IReV OCR Drain"]
+    workflows: ["IReV OCR Drain", "INEC Geography Sync"]
     types: [completed]
 
 concurrency:
@@ -45,7 +45,7 @@ jobs:
           else
             test -n "$SUPABASE_ACCESS_TOKEN"
             test -n "$SUPABASE_PROJECT_ID"
-            curl --fail --silent --show-error --location               -H "Authorization: Bearer $SUPABASE_ACCESS_TOKEN"               "https://api.supabase.com/v1/projects/$SUPABASE_PROJECT_ID/api-keys"               > /tmp/supabase-api-keys.json
+            curl --fail --silent --show-error --location -H "Authorization: Bearer $SUPABASE_ACCESS_TOKEN" "https://api.supabase.com/v1/projects/$SUPABASE_PROJECT_ID/api-keys" > /tmp/supabase-api-keys.json
             SERVICE_KEY="$(python3 -c 'import json; d=json.load(open("/tmp/supabase-api-keys.json")); keys=d if isinstance(d,list) else d.get("api_keys",d.get("keys",[])); print(next((x.get("api_key","") for x in keys if x.get("name")=="service_role" or x.get("type")=="secret"),""))')"
             test -n "$SERVICE_KEY"
             echo "SUPABASE_SERVICE_ROLE_KEY=$SERVICE_KEY" >> "$GITHUB_ENV"
