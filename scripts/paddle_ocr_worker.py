@@ -75,12 +75,18 @@ def finish_job(job_id: str, attempts: int, ok: bool, error: str | None = None):
 
 def resolve_live_irev_source(sheet: dict) -> str | None:
     source = str(sheet.get("source_url") or "").strip()
-    if not source or "inecelectionresults.ng/elections/" not in source or "/pu/" not in source:
-        return None
+    route_pu_id = ""
     match = re.search(r"/elections/([^/]+)/pu/([^/]+)/document", source)
-    if not match:
-        return None
-    election_external_id, route_pu_id = match.group(1), match.group(2)
+    if match:
+        route_pu_id = match.group(2)
+        election_external_id = match.group(1)
+    else:
+        election_rows = rest(
+            f"elections?id=eq.{sheet['election_id']}&select=external_id"
+        )
+        if not election_rows or not election_rows[0].get("external_id"):
+            return None
+        election_external_id = str(election_rows[0]["external_id"])
 
     pu_rows = rest(
         f"polling_units?id=eq.{sheet['polling_unit_id']}&select=external_id,ward_id,irev_pu_id,pu_code,name"
@@ -163,13 +169,12 @@ def download_source(sheet: dict) -> tuple[bytes, str, str]:
     # Legacy docs.inecelectionresults.net assets can be unreachable even when
     # the live IReV API still exposes the polling-unit document URL. Resolve
     # the live document directly before attempting the legacy asset.
-    if "inecelectionresults.net" in str(url).lower():
-        try:
-            live_url = resolve_live_irev_source(sheet)
-            if live_url:
-                url = live_url
-        except Exception as exc:
-            print(json.dumps({"source_resolution_warning": str(exc)}))
+    try:
+        live_url = resolve_live_irev_source(sheet)
+        if live_url:
+            url = live_url
+    except Exception as exc:
+        print(json.dumps({"source_resolution_warning": str(exc)}))
     headers = {
         "User-Agent": "INEC-Result-Intelligence/1.0 paddle-ocr-worker",
         "Accept": "image/avif,image/webp,image/apng,image/svg+xml,image/*,application/pdf,text/html;q=0.8,*/*;q=0.5",
