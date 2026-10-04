@@ -16,6 +16,8 @@ from paddleocr import PaddleOCR
 SUPABASE_URL = os.environ["SUPABASE_URL"].rstrip("/")
 SUPABASE_KEY = os.environ["SUPABASE_SERVICE_ROLE_KEY"]
 GEMINI_KEY = os.environ.get("GOOGLE_GENERATIVE_AI_API_KEY", "").strip()
+IREV_KEY = os.environ.get("IREV_KEY", "").strip()
+IREV_BASE = "https://dolphin-app-sleqh.ondigitalocean.app/api/v1"
 WORKER_ID = f"paddle-ocr:{uuid.uuid4()}"
 MAX_ATTEMPTS = 3
 
@@ -103,25 +105,77 @@ def resolve_live_irev_source(sheet: dict) -> str | None:
 
     election_external_id = re.sub(r"^irev:", "", election_external_id, flags=re.I)
 
-    election_external_id = re.sub(r"^irev:", "", election_external_id, flags=re.I)
-
     headers = {
         "User-Agent": "INEC-Result-Intelligence/1.0 paddle-ocr-worker",
         "Accept": "application/json, text/plain, */*",
         "Origin": "https://inecelectionresults.ng",
         "Referer": "https://inecelectionresults.ng/",
+        **({"x-api-key": IREV_KEY} if IREV_KEY else {}),
+        "x-api-rt": str(int(time.time() * 1000)),
     }
-    response = requests.get(
-        f"https://dolphin-app-sleqh.ondigitalocean.app/api/v1/elections/{requests.utils.quote(election_external_id, safe='')}/pus",
-        params={"ward": ward_oid},
-        headers=headers,
-        timeout=30,
-    )
-    response.raise_for_status()
-    payload = response.json()
-    rows = payload if isinstance(payload, list) else payload.get("data", []) if isinstance(payload, dict) else []
-    if not isinstance(rows, list):
-        return None
+
+    def api_rows(payload):
+        if isinstance(payload, list):
+            return [row for row in payload if isinstance(row, dict)]
+        if isinstance(payload, dict):
+            for key in ("data", "polling_units", "pus", "results", "items"):
+                value = payload.get(key)
+                if isinstance(value, list):
+                    return [row for row in value if isinstance(row, dict)]
+                if isinstance(value, dict):
+                    nested = api_rows(value)
+                    if nested:
+                        return nested
+        return []
+
+    def fetch_pus(target_ward_oid):
+        response = requests.get(
+            f"{IREV_BASE}/elections/{requests.utils.quote(election_external_id, safe='')}/pus",
+            params={"ward": target_ward_oid},
+            headers=headers,
+            timeout=30,
+        )
+        response.raise_for_status()
+        return api_rows(response.json())
+
+    rows = fetch_pus(ward_oid)
+    if not rows:
+        hierarchy = requests.get(
+            f"{IREV_BASE}/elections/{requests.utils.quote(election_external_id, safe='')}/lga",
+            headers=headers,
+            timeout=30,
+        )
+        hierarchy.raise_for_status()
+        hierarchy_payload = hierarchy.json()
+        lgas = hierarchy_payload.get("data", []) if isinstance(hierarchy_payload, dict) else []
+        if not isinstance(lgas, list):
+            lgas = []
+        ward_numeric = None
+        ward_numeric_raw = ward_rows[0].get("irev_ward_id")
+        try:
+            ward_numeric = int(ward_numeric_raw)
+        except (TypeError, ValueError):
+            pass
+        matched_oid = None
+        for lga in lgas:
+            if not isinstance(lga, dict):
+                continue
+            for ward in lga.get("wards", []) if isinstance(lga.get("wards"), list) else []:
+                if not isinstance(ward, dict):
+                    continue
+                candidate_oid = str(ward.get("_id") or "").strip()
+                candidate_numeric = ward.get("ward_id", ward.get("id"))
+                try:
+                    candidate_numeric = int(candidate_numeric)
+                except (TypeError, ValueError):
+                    candidate_numeric = None
+                if (candidate_oid and candidate_oid.lower() == ward_oid.lower()) or (ward_numeric is not None and candidate_numeric == ward_numeric):
+                    matched_oid = candidate_oid or None
+                    break
+            if matched_oid:
+                break
+        if matched_oid and matched_oid.lower() != ward_oid.lower():
+            rows = fetch_pus(matched_oid)
 
     target_external = str(pu.get("external_id") or "").strip()
     target_code = str(pu.get("pu_code") or "").strip().lower()
