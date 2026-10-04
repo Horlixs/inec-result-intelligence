@@ -101,6 +101,8 @@ def resolve_live_irev_source(sheet: dict) -> str | None:
         return None
     ward_oid = str(ward_rows[0]["irev_ward_oid"])
 
+    election_external_id = re.sub(r"^irev:", "", election_external_id, flags=re.I)
+
     headers = {
         "User-Agent": "INEC-Result-Intelligence/1.0 paddle-ocr-worker",
         "Accept": "application/json, text/plain, */*",
