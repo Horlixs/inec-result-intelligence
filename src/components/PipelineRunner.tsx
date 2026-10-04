@@ -4,7 +4,7 @@ import { supabase } from "../lib/supabase";
 
 interface PipelineRunnerProps {}
 interface SyncResponse { ok?: boolean; error?: string; discovered?: number; }
-interface BatchResponse { ok?: boolean; error?: unknown; processed?: number; failed?: number; remaining?: number; ward_jobs?: { processed?: number; failed?: number }; processing_delegated?: boolean; }
+interface BatchResponse { ok?: boolean; error?: unknown; processed?: number; failed?: number; remaining?: number; ward_jobs?: { processed?: number; failed?: number }; queue?: { ward_queued?: number; ward_processing?: number; sheet_queued?: number; sheet_processing?: number; total?: number }; processing_delegated?: boolean; }
 
 function errorText(value: unknown): string { if (value instanceof Error) return value.message; if (typeof value === "string") return value; if (value && typeof value === "object") { const record = value as Record<string, unknown>; if (typeof record.message === "string") return record.message; if (typeof record.error === "string") return record.error; try { return JSON.stringify(value); } catch { return "The pipeline returned an unreadable error."; } } return String(value ?? "The pipeline could not be completed."); }
 
@@ -30,9 +30,10 @@ export function PipelineRunner(_props: PipelineRunnerProps) {
 
       const batch = await post("/api/irev-batch", {});
       const wardCount = batch.ward_jobs?.processed ?? 0;
-      const sheetQueue = batch.remaining ?? 0;
-      setMessage(`Discovery complete — ${discovery.discovered ?? 0} elections found. ${wardCount} ward jobs synchronized; ${sheetQueue} result-processing jobs are queued for the PaddleOCR worker.`);
-      setError((batch.ward_jobs?.failed ?? 0) > 0);
+      const wardFailed = batch.ward_jobs?.failed ?? 0;
+      const sheetQueue = batch.queue?.sheet_queued ?? 0;
+      setMessage(`Discovery complete — ${discovery.discovered ?? 0} elections found. ${wardCount} ward jobs processed in this run; ${sheetQueue} result-processing jobs are currently queued for the PaddleOCR worker.${wardFailed ? ` ${wardFailed} ward jobs failed.` : ""}`);
+      setError(wardFailed > 0);
     } catch (caught: unknown) {
       setError(true); setMessage(errorText(caught));
     } finally { setRunning(false); }
