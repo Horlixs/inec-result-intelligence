@@ -39,17 +39,20 @@ begin
     from public.result_processing_jobs j
     left join public.result_sheets rs
       on rs.id = j.result_sheet_id
+    left join public.elections e
+      on e.id = rs.election_id
     where j.status = 'queued'
       and j.available_at <= now()
       and j.attempts < least(greatest(coalesce(p_max_attempts, 5), 1), 5)
       and j.engine = p_engine
     order by
+      coalesce(e.election_date, date '1900-01-01') desc,
       case
         when lower(coalesce(rs.evidence_url, rs.source_url, '')) like '%inecelectionresults.net%'
           then 1
         else 0
       end,
-      j.created_at
+      j.created_at desc
     for update of j skip locked
     limit 1
   ),
