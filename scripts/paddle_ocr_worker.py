@@ -497,25 +497,42 @@ def process(job: dict[str, Any]) -> None:
         })
 
 
+MAX_JOBS_PER_RUN = 3
+
+
 def main() -> int:
-    job_rows = rpc("claim_result_processing_job", {"p_worker_id": WORKER_ID, "p_max_attempts": MAX_ATTEMPTS, "p_engine": "paddle"})
-    if not job_rows:
-        print("No PaddleOCR job available")
-        return 0
-    job = job_rows[0]
-    try:
-        process(job)
-        finish_job(job["job_id"], int(job["attempts"]), True)
-        print(json.dumps({"ok": True, "job_id": job["job_id"], "result_sheet_id": job["result_sheet_id"]}))
-        return 0
-    except Exception as exc:
-        message = str(exc)
+    processed = 0
+    failed = 0
+
+    # Drain several queued jobs in one worker invocation. GitHub Actions starts
+    # this workflow every three minutes; processing only one job per invocation
+    # left a growing queue even though the worker was healthy.
+    for _ in range(MAX_JOBS_PER_RUN):
+        job_rows = rpc("claim_result_processing_job", {"p_worker_id": WORKER_ID, "p_max_attempts": MAX_ATTEMPTS, "p_engine": "paddle"})
+        if not job_rows:
+            if processed == 0 and failed == 0:
+                print("No PaddleOCR job available")
+            break
+
+        job = job_rows[0]
         try:
-            rest(f"result_sheets?id=eq.{job['result_sheet_id']}", method="PATCH", payload={"status": "pending_review", "evidence_status": "remote_only", "last_error": message[:2000]})
-        finally:
-            finish_job(job["job_id"], int(job["attempts"]), False, message)
-        print(json.dumps({"ok": False, "job_id": job["job_id"], "error": message}), file=sys.stderr)
-        return 1
+            process(job)
+            finish_job(job["job_id"], int(job["attempts"]), True)
+            processed += 1
+            print(json.dumps({"ok": True, "job_id": job["job_id"], "result_sheet_id": job["result_sheet_id"], "processed_in_run": processed}))
+        except Exception as exc:
+            message = str(exc)
+            failed += 1
+            try:
+                rest(f"result_sheets?id=eq.{job['result_sheet_id']}", method="PATCH", payload={"status": "pending_review", "evidence_status": "remote_only", "last_error": message[:2000]})
+            finally:
+                finish_job(job["job_id"], int(job["attempts"]), False, message)
+            print(json.dumps({"ok": False, "job_id": job["job_id"], "error": message}), file=sys.stderr)
+            # Do not stop the drain because one bad sheet should not block the queue.
+            continue
+
+    print(json.dumps({"ok": failed == 0, "processed": processed, "failed": failed, "worker": WORKER_ID}))
+    return 0 if processed > 0 or failed == 0 else 1
 
 
 if __name__ == "__main__":
