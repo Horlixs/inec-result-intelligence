@@ -1,4 +1,5 @@
 name: PaddleOCR Result Worker
+# Manual recovery trigger: keep the existing worker path active.
 
 on:
   push:
