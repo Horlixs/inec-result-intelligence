@@ -3,6 +3,38 @@ import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 const SUPABASE_URL = Deno.env.get("SUPABASE_URL")!;
 const SERVICE_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
 const supabase = createClient(SUPABASE_URL, SERVICE_KEY);
+const GITHUB_DISPATCH_TOKEN = Deno.env.get("GITHUB_DISPATCH_TOKEN")?.trim() || null;
+const GITHUB_OWNER = "Horlixs";
+const GITHUB_REPO = "inec-result-intelligence";
+const GITHUB_WORKFLOW = "paddle-ocr-worker.yml";
+const GITHUB_REF = "main";
+
+async function dispatchPaddleWorker() {
+  if (!GITHUB_DISPATCH_TOKEN) {
+    throw new Error("PaddleOCR worker dispatch is not configured: GITHUB_DISPATCH_TOKEN is missing.");
+  }
+
+  const response = await fetch(
+    `https://api.github.com/repos/${GITHUB_OWNER}/${GITHUB_REPO}/actions/workflows/${GITHUB_WORKFLOW}/dispatches`,
+    {
+      method: "POST",
+      headers: {
+        "Accept": "application/vnd.github+json",
+        "Authorization": `Bearer ${GITHUB_DISPATCH_TOKEN}`,
+        "X-GitHub-Api-Version": "2022-11-28",
+        "Content-Type": "application/json",
+        "User-Agent": "INEC-Result-Intelligence/1.0",
+      },
+      body: JSON.stringify({ ref: GITHUB_REF }),
+    },
+  );
+
+  if (!response.ok) {
+    const body = await response.text();
+    throw new Error(`GitHub worker dispatch failed (HTTP ${response.status}): ${body.slice(0, 500)}`);
+  }
+}
+
 const CORS = {
   "Access-Control-Allow-Origin": "https://inec-result-intelligence.vercel.app",
   "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type",
