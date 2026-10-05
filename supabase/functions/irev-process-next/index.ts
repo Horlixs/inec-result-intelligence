@@ -30,6 +30,8 @@ async function run() {
 
   if (error) throw error;
 
+  const requestedAt = new Date().toISOString();
+
   if (!data?.length) {
     return {
       ok: true,
@@ -57,6 +59,8 @@ async function run() {
     status: "scheduled",
     message: "Processing requested. The queued PaddleOCR job has been released for the existing worker to claim.",
     result_processing_job_id: data[0].id,
+    requested_at: requestedAt,
+    pipeline_run_id: runRow?.id ?? null,
   };
 }
 
