@@ -5,7 +5,7 @@ import { supabase } from "../lib/supabase";
 interface PipelineRunnerProps {}
 interface SyncResponse { ok?: boolean; error?: string; discovered?: number; }
 interface BatchResponse { ok?: boolean; error?: unknown; ward_jobs?: { processed?: number; failed?: number }; queue?: { sheet_queued?: number }; }
-interface ProcessingResponse { ok?: boolean; status?: string; error?: unknown; result_sheet_id?: string; result?: { error?: string }; }
+interface ProcessingResponse { ok?: boolean; status?: string; message?: string; error?: unknown; result_sheet_id?: string; result?: { error?: string }; }
 
 function errorText(value: unknown): string { if (value instanceof Error) return value.message; if (typeof value === "string") return value; if (value && typeof value === "object") { const r=value as Record<string,unknown>; if(typeof r.message==="string") return r.message; if(typeof r.error==="string") return r.error; try{return JSON.stringify(value)}catch{return "The pipeline returned an unreadable error.";} } return String(value ?? "The pipeline could not be completed."); }
 
