@@ -196,6 +196,10 @@ def resolve_live_irev_source(sheet: dict) -> str | None:
                     return found
         return None
 
+    # Do not accept the first loose match. IReV rows can contain several
+    # identifiers and stale numeric ids; rank exact identifiers so an exact
+    # polling-unit code/external id wins over a coincidental numeric match.
+    matches = []
     for row in rows:
         nested = row.get("polling_unit") if isinstance(row.get("polling_unit"), dict) else {}
         ids = [str(row.get(k) or "").strip() for k in ("polling_unit_oid", "external_id", "_id")]
@@ -207,32 +211,57 @@ def resolve_live_irev_source(sheet: dict) -> str | None:
             numeric = None
         code = str(row.get("pu_code") or nested.get("pu_code") or row.get("code") or nested.get("code") or "").strip().lower()
         name = re.sub(r"\s+", " ", str(row.get("name") or row.get("polling_unit_name") or nested.get("name") or "").strip().lower())
-        if (
-            route_pu_id in ids or target_external in ids or
-            (target_numeric is not None and numeric == target_numeric) or
-            (target_code and code and target_code == code) or
-            (target_name and name and target_name == name)
-        ):
-            print(json.dumps({
-                "console": "IREV_MATCHED_PU",
-                "target_numeric": target_numeric,
-                "target_code": target_code,
-                "matched_keys": sorted(str(k) for k in row.keys()),
-                "document_id": row.get("document_id"),
-                "document": row.get("document"),
-                "result": row.get("result"),
-                "result_sheet": row.get("result_sheet"),
-                "file": row.get("file"),
-                "file_url": row.get("file_url"),
-                "document_url": row.get("document_url"),
-                "url": row.get("url"),
-                "href": row.get("href"),
-                "old_documents": row.get("old_documents"),
-            }, default=str))
+
+        score = 0
+        match_reason = None
+        if route_pu_id and route_pu_id in ids:
+            score, match_reason = 100, "route_pu_id"
+        elif target_external and target_external in ids:
+            score, match_reason = 90, "external_id"
+        elif target_code and code and target_code == code:
+            score, match_reason = 80, "pu_code"
+        elif target_numeric is not None and numeric == target_numeric:
+            score, match_reason = 70, "numeric_id"
+        elif target_name and name and target_name == name:
+            score, match_reason = 60, "name"
+
+        if score:
             document = inspect(row.get("document") or row.get("result") or row.get("result_sheet") or row.get("file") or row)
             if document and document.startswith(("http://", "https://")):
-                return document
-    return None
+                matches.append((score, match_reason, row, document))
+
+    if not matches:
+        return None
+
+    best_score = max(item[0] for item in matches)
+    best = [item for item in matches if item[0] == best_score]
+    unique_documents = {item[3] for item in best}
+    if len(unique_documents) > 1:
+        raise RuntimeError(
+            f"IReV polling-unit match is ambiguous for {target_code or target_external or target_numeric}: "
+            f"{len(unique_documents)} documents matched at identifier priority {best_score}"
+        )
+
+    score, match_reason, row, document = best[0]
+    print(json.dumps({
+        "console": "IREV_MATCHED_PU",
+        "target_numeric": target_numeric,
+        "target_code": target_code,
+        "match_reason": match_reason,
+        "match_score": score,
+        "matched_keys": sorted(str(k) for k in row.keys()),
+        "document_id": row.get("document_id"),
+        "document": row.get("document"),
+        "result": row.get("result"),
+        "result_sheet": row.get("result_sheet"),
+        "file": row.get("file"),
+        "file_url": row.get("file_url"),
+        "document_url": row.get("document_url"),
+        "url": row.get("url"),
+        "href": row.get("href"),
+        "old_documents": row.get("old_documents"),
+    }, default=str))
+    return document
 
 
 def download_source(sheet: dict) -> tuple[bytes, str, str]:
@@ -402,17 +431,33 @@ def structure_with_gemini(lines: list[dict[str, Any]], image_paths: list[Path]) 
         "contents": [{"parts": parts}],
         "generationConfig": {"temperature": 0, "responseMimeType": "application/json", "maxOutputTokens": 2048},
     }
-    response = requests.post(
-        "https://generativelanguage.googleapis.com/v1beta/models/gemini-3.5-flash-lite:generateContent",
-        headers={"Content-Type": "application/json", "x-goog-api-key": GEMINI_KEY},
-        json=body,
-        timeout=60,
-    )
-    response.raise_for_status()
-    text = response.json().get("candidates", [{}])[0].get("content", {}).get("parts", [{}])[0].get("text")
-    if not text:
-        raise RuntimeError("Gemini returned no structured extraction")
-    return json.loads(text)
+    last_error = None
+    for attempt in range(1, 5):
+        try:
+            response = requests.post(
+                "https://generativelanguage.googleapis.com/v1beta/models/gemini-3.5-flash-lite:generateContent",
+                headers={"Content-Type": "application/json", "x-goog-api-key": GEMINI_KEY},
+                json=body,
+                timeout=60,
+            )
+            if response.ok:
+                text = response.json().get("candidates", [{}])[0].get("content", {}).get("parts", [{}])[0].get("text")
+                if not text:
+                    raise RuntimeError("Gemini returned no structured extraction")
+                return json.loads(text)
+
+            last_error = f"Gemini HTTP {response.status_code}: {response.text[:1000]}"
+            if response.status_code not in {408, 425, 429, 500, 502, 503, 504}:
+                response.raise_for_status()
+        except (requests.RequestException, json.JSONDecodeError, RuntimeError) as exc:
+            last_error = str(exc)
+
+        if attempt < 4:
+            delay = 3 * (2 ** (attempt - 1))
+            print(json.dumps({"gemini_retry": attempt, "delay_seconds": delay, "error": last_error}))
+            time.sleep(delay)
+
+    raise RuntimeError(last_error or "Gemini structuring failed")
 
 
 def validate(extracted: dict[str, Any]) -> tuple[bool, list[dict[str, Any]]]:
