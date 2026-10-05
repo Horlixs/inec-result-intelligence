@@ -186,7 +186,7 @@ def resolve_live_irev_source(sheet: dict) -> str | None:
         if isinstance(value, str) and value.strip():
             return value.strip()
         if isinstance(value, dict):
-            for key in ("url", "document_url", "file_url", "src", "path", "href"):
+            for key in ("document_url", "backup_url", "file_url", "url", "src", "path", "href"):
                 found = inspect(value.get(key))
                 if found:
                     return found
