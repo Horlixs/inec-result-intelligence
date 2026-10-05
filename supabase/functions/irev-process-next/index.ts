@@ -17,9 +17,6 @@ function json(data: unknown, status = 200) {
 }
 
 async function run() {
-  // PaddleOCR runs in the existing GitHub Actions worker. Do not claim a
-  // queue row here: doing so would route a Paddle job into the legacy
-  // irev-process Edge Function and can permanently fail it on its timeout.
   const { data, error } = await supabase
     .from("result_processing_jobs")
     .select("id")
@@ -40,15 +37,32 @@ async function run() {
     };
   }
 
+  const jobId = data[0].id;
+  const { data: runRow, error: runError } = await supabase
+    .from("pipeline_runs")
+    .insert({
+      started_at: requestedAt,
+      status: "requested",
+      trigger_source: "manual_processing_button",
+      metadata: {
+        run_type: "processing",
+        requested_job_id: jobId,
+      },
+    })
+    .select("id")
+    .single();
+
+  if (runError) throw runError;
+
   const { error: releaseError } = await supabase
     .from("result_processing_jobs")
     .update({
-      available_at: new Date().toISOString(),
+      available_at: requestedAt,
       locked_at: null,
       locked_by: null,
-      updated_at: new Date().toISOString(),
+      updated_at: requestedAt,
     })
-    .eq("id", data[0].id)
+    .eq("id", jobId)
     .eq("status", "queued")
     .eq("engine", "paddle");
 
@@ -58,9 +72,9 @@ async function run() {
     ok: true,
     status: "scheduled",
     message: "Processing requested. The queued PaddleOCR job has been released for the existing worker to claim.",
-    result_processing_job_id: data[0].id,
+    result_processing_job_id: jobId,
     requested_at: requestedAt,
-    pipeline_run_id: runRow?.id ?? null,
+    pipeline_run_id: runRow.id,
   };
 }
 
