@@ -4,8 +4,6 @@
 
 drop function if exists public.claim_result_processing_job(text, integer, text);
 
-drop function if exists public.claim_result_processing_job(text, integer);
-
 create function public.claim_result_processing_job(
   p_worker_id text,
   p_max_attempts integer,
