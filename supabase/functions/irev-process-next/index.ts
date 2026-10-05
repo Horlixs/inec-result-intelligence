@@ -38,10 +38,24 @@ async function run() {
     };
   }
 
+  const { error: releaseError } = await supabase
+    .from("result_processing_jobs")
+    .update({
+      available_at: new Date().toISOString(),
+      locked_at: null,
+      locked_by: null,
+      updated_at: new Date().toISOString(),
+    })
+    .eq("id", data[0].id)
+    .eq("status", "queued")
+    .eq("engine", "paddle");
+
+  if (releaseError) throw releaseError;
+
   return {
     ok: true,
     status: "scheduled",
-    message: "PaddleOCR processing is handled by the existing worker. The queued job was left untouched for the worker to claim.",
+    message: "Processing requested. The queued PaddleOCR job has been released for the existing worker to claim.",
     result_processing_job_id: data[0].id,
   };
 }
