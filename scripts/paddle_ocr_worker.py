@@ -327,7 +327,7 @@ def materialize_images(data: bytes, mime: str, temp: Path) -> list[Path]:
     paths: list[Path] = []
     for index in range(len(pdf)):
         page = pdf[index]
-        pix = page.get_pixmap(matrix=fitz.Matrix(3.0, 3.0), alpha=False)
+        pix = page.get_pixmap(matrix=fitz.Matrix(2.0, 2.0), alpha=False)
         path = temp / f"page-{index + 1}.png"
         pix.save(str(path))
         paths.append(path)
@@ -373,7 +373,7 @@ def ocr_images(paths: list[Path]) -> tuple[list[dict[str, Any]], float]:
     return lines, (sum(scores) / len(scores) if scores else 0.0)
 
 
-def structure_with_gemini(lines: list[dict[str, Any]]) -> dict[str, Any]:
+def structure_with_gemini(lines: list[dict[str, Any]], image_paths: list[Path]) -> dict[str, Any]:
     if not GEMINI_KEY:
         raise RuntimeError("GOOGLE_GENERATIVE_AI_API_KEY is required for result structuring after PaddleOCR")
     ordered_lines = sorted(
@@ -389,8 +389,17 @@ def structure_with_gemini(lines: list[dict[str, Any]]) -> dict[str, Any]:
         for line in ordered_lines
     )
     prompt = """You are structuring OCR output from an INEC Nigerian polling-unit result sheet.\nReturn ONLY JSON matching this schema:\n{\"pollingUnitName\":string|null,\"pollingUnitCode\":string|null,\"registeredVoters\":number|null,\"accreditedVoters\":number|null,\"rejectedVotes\":number|null,\"candidates\":[{\"label\":string,\"votes\":number|null}],\"confidence\":number}\nRules: never invent missing values; preserve uncertain handwritten candidate labels literally; do not silently correct OCR text; use null when a value cannot be established; votes must be integers or null; confidence is your confidence in the structured extraction, not OCR confidence. Candidate rows should include every candidate/result label that can be identified."""
+    parts = [{"text": prompt + "\n\nOCR output:\n" + ocr_text}]
+    for image_path in image_paths:
+        image_bytes = image_path.read_bytes()
+        parts.append({
+            "inlineData": {
+                "mimeType": "image/png",
+                "data": base64.b64encode(image_bytes).decode("ascii"),
+            }
+        })
     body = {
-        "contents": [{"parts": [{"text": prompt + "\n\nOCR output:\n" + ocr_text}]}],
+        "contents": [{"parts": parts}],
         "generationConfig": {"temperature": 0, "responseMimeType": "application/json", "maxOutputTokens": 2048},
     }
     response = requests.post(
@@ -453,7 +462,7 @@ def process(job: dict[str, Any]) -> None:
         lines, ocr_confidence = ocr_images(paths)
         if not lines:
             raise RuntimeError("PaddleOCR returned no readable text")
-        extracted = structure_with_gemini(lines)
+        extracted = structure_with_gemini(lines, paths)
         candidates = extracted.get("candidates") if isinstance(extracted.get("candidates"), list) else []
         valid, issues = validate(extracted)
         structure_confidence = float(extracted.get("confidence") or 0)
