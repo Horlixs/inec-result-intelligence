@@ -7,6 +7,7 @@ on:
       - ".github/workflows/paddle-ocr-worker.yml"
       - "scripts/paddle_ocr_worker.py"
       - "scripts/paddle_ocr_debug.py"
+      - "sitecustomize.py"
   schedule:
     - cron: "*/3 * * * *"
   workflow_dispatch:
@@ -33,6 +34,7 @@ jobs:
       GOOGLE_GENERATIVE_AI_API_KEY: ${{ secrets.GOOGLE_GENERATIVE_AI_API_KEY }}
       IREV_KEY: ${{ secrets.IREV_KEY }}
       PADDLE_PDX_MODEL_SOURCE: BOS
+      PYTHONPATH: ${{ github.workspace }}
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
