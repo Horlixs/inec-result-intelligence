@@ -69,5 +69,5 @@ jobs:
           python -m pip install paddlepaddle==3.2.0 -i https://www.paddlepaddle.org.cn/packages/stable/cpu/
           python -m pip install -r requirements-paddleocr.txt
 
-      - name: Process one queued result sheet with console diagnostics
-        run: python scripts/paddle_ocr_debug.py
+      - name: Process queued result sheets
+        run: python scripts/paddle_ocr_worker.py
