@@ -213,6 +213,22 @@ def resolve_live_irev_source(sheet: dict) -> str | None:
             (target_code and code and target_code == code) or
             (target_name and name and target_name == name)
         ):
+            print(json.dumps({
+                "console": "IREV_MATCHED_PU",
+                "target_numeric": target_numeric,
+                "target_code": target_code,
+                "matched_keys": sorted(str(k) for k in row.keys()),
+                "document_id": row.get("document_id"),
+                "document": row.get("document"),
+                "result": row.get("result"),
+                "result_sheet": row.get("result_sheet"),
+                "file": row.get("file"),
+                "file_url": row.get("file_url"),
+                "document_url": row.get("document_url"),
+                "url": row.get("url"),
+                "href": row.get("href"),
+                "old_documents": row.get("old_documents"),
+            }, default=str))
             document = inspect(row.get("document") or row.get("result") or row.get("result_sheet") or row.get("file") or row)
             if document and document.startswith(("http://", "https://")):
                 return document
