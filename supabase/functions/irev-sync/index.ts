@@ -784,6 +784,9 @@ async function crawlElection(sourceUrl: string): Promise<string[]> {
 
 Deno.serve(async request => {
   const startedAt = new Date().toISOString();
+  let requestBody: Record<string, unknown> = {};
+  try { requestBody = await request.json(); } catch {}
+  const triggerSource = typeof requestBody.trigger_source === "string" ? requestBody.trigger_source : "server";
   if (request.method === "OPTIONS") return new Response(null, { status: 204, headers: CORS_HEADERS });
   if (request.method !== "POST") return json({ ok: false, error: "POST required" }, 405);
 
@@ -1003,7 +1006,7 @@ Deno.serve(async request => {
     }
 
     stage = "insert_pipeline_run";
-    const pipeline = await supabaseRest("pipeline_runs", { method: "POST", headers: { Prefer: "return=minimal" }, body: JSON.stringify({ started_at: startedAt, finished_at: new Date().toISOString(), status: electionJobsFailed > 0 ? "completed_with_errors" : "completed", trigger_source: "server", discovered: elections.length, metadata: { source: "IReV", mode: "server-side-bounded-crawl",
+    const pipeline = await supabaseRest("pipeline_runs", { method: "POST", headers: { Prefer: "return=minimal" }, body: JSON.stringify({ started_at: startedAt, finished_at: new Date().toISOString(), status: electionJobsFailed > 0 ? "completed_with_errors" : "completed", trigger_source: triggerSource, discovered: elections.length, metadata: { run_type: "discovery", source: "IReV", mode: "server-side-bounded-crawl",
         max_elections_per_sync: MAX_ELECTIONS_PER_SYNC,
         max_directory_pages: MAX_DIRECTORY_PAGES,
         max_crawl_pages: MAX_CRAWL_PAGES,
