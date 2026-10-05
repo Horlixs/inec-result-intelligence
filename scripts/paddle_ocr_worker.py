@@ -325,9 +325,9 @@ def materialize_images(data: bytes, mime: str, temp: Path) -> list[Path]:
 
     pdf = fitz.open(stream=data, filetype="pdf")
     paths: list[Path] = []
-    for index in range(min(len(pdf), 3)):
+    for index in range(len(pdf)):
         page = pdf[index]
-        pix = page.get_pixmap(matrix=fitz.Matrix(2.0, 2.0), alpha=False)
+        pix = page.get_pixmap(matrix=fitz.Matrix(3.0, 3.0), alpha=False)
         path = temp / f"page-{index + 1}.png"
         pix.save(str(path))
         paths.append(path)
@@ -340,9 +340,9 @@ def ocr_images(paths: list[Path]) -> tuple[list[dict[str, Any]], float]:
     ocr = PaddleOCR(
         ocr_version="PP-OCRv5",
         lang="en",
-        use_doc_orientation_classify=False,
-        use_doc_unwarping=False,
-        use_textline_orientation=False,
+        use_doc_orientation_classify=True,
+        use_doc_unwarping=True,
+        use_textline_orientation=True,
         engine="paddle",
     )
     lines: list[dict[str, Any]] = []
@@ -376,9 +376,17 @@ def ocr_images(paths: list[Path]) -> tuple[list[dict[str, Any]], float]:
 def structure_with_gemini(lines: list[dict[str, Any]]) -> dict[str, Any]:
     if not GEMINI_KEY:
         raise RuntimeError("GOOGLE_GENERATIVE_AI_API_KEY is required for result structuring after PaddleOCR")
+    ordered_lines = sorted(
+        lines,
+        key=lambda line: (
+            int(line.get("page", 0)),
+            float((line.get("box") or [[0, 0, 0, 0]])[0][1]) if line.get("box") else 0.0,
+            float((line.get("box") or [[0, 0, 0, 0]])[0][0]) if line.get("box") else 0.0,
+        ),
+    )
     ocr_text = "\n".join(
-        f"[page {line['page']} | OCR confidence {line['confidence']:.3f}] {line['text']}"
-        for line in lines
+        f"[page {line['page']} | OCR confidence {line['confidence']:.3f} | box {line.get('box')}] {line['text']}"
+        for line in ordered_lines
     )
     prompt = """You are structuring OCR output from an INEC Nigerian polling-unit result sheet.\nReturn ONLY JSON matching this schema:\n{\"pollingUnitName\":string|null,\"pollingUnitCode\":string|null,\"registeredVoters\":number|null,\"accreditedVoters\":number|null,\"rejectedVotes\":number|null,\"candidates\":[{\"label\":string,\"votes\":number|null}],\"confidence\":number}\nRules: never invent missing values; preserve uncertain handwritten candidate labels literally; do not silently correct OCR text; use null when a value cannot be established; votes must be integers or null; confidence is your confidence in the structured extraction, not OCR confidence. Candidate rows should include every candidate/result label that can be identified."""
     body = {
