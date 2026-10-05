@@ -2,7 +2,11 @@
 -- The previous RPC could return an already-completed job, causing the worker
 -- to reprocess the same sheet while leaving the real queue untouched.
 
-create or replace function public.claim_result_processing_job(
+drop function if exists public.claim_result_processing_job(text, integer, text);
+
+drop function if exists public.claim_result_processing_job(text, integer);
+
+create function public.claim_result_processing_job(
   p_worker_id text,
   p_max_attempts integer,
   p_engine text
