@@ -7,7 +7,7 @@ on:
       - "scripts/paddle_ocr_worker.py"
       - "scripts/paddle_ocr_worker_runner.py"
   schedule:
-    - cron: "*/3 * * * *"
+    - cron: "* * * * *"
   workflow_dispatch:
   workflow_run:
     workflows: ["IReV OCR Drain", "INEC Geography Sync"]
