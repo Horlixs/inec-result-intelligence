@@ -1,13 +1,11 @@
 name: PaddleOCR Result Worker
-# Manual recovery trigger: keep the existing worker path active.
 
 on:
   push:
     paths:
       - ".github/workflows/paddle-ocr-worker.yml"
       - "scripts/paddle_ocr_worker.py"
-      - "scripts/paddle_ocr_debug.py"
-      - "sitecustomize.py"
+      - "scripts/paddle_ocr_worker_runner.py"
   schedule:
     - cron: "*/3 * * * *"
   workflow_dispatch:
@@ -72,4 +70,4 @@ jobs:
           python -m pip install -r requirements-paddleocr.txt
 
       - name: Process queued result sheets
-        run: python scripts/paddle_ocr_worker.py
+        run: python scripts/paddle_ocr_worker_runner.py
