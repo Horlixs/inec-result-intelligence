@@ -51,20 +51,44 @@ export function ElectionDirectory() {
   const [typeFilter, setTypeFilter] = useState("all");
 
   useEffect(() => {
-    if (!supabase) {
+    const client = supabase;
+    if (!client) {
       setLoading(false);
       return;
     }
 
-    void supabase
-      .from("elections")
-      .select("id,name,election_type,election_date,status")
-      .order("election_date", { ascending: false })
-      .then((response) => {
-        setRows((response.data ?? []) as Election[]);
-        setLoading(false);
-      });
-  }, []);
+    let cancelled = false;
+    const normalizedQuery = query.trim();
+
+    setLoading(true);
+    const timer = window.setTimeout(() => {
+      void (async () => {
+        try {
+          let request = client
+            .from("elections")
+            .select("id,name,election_type,election_date,status")
+            .order("election_date", { ascending: false });
+
+          if (normalizedQuery) {
+            request = request.ilike("name", `%${normalizedQuery}%`).limit(100);
+          } else {
+            request = request.limit(1000);
+          }
+
+          const response = await request;
+          if (cancelled) return;
+          setRows((response.data ?? []) as Election[]);
+        } finally {
+          if (!cancelled) setLoading(false);
+        }
+      })();
+    }, 250);
+
+    return () => {
+      cancelled = true;
+      window.clearTimeout(timer);
+    };
+  }, [query]);
 
   const typeOptions = useMemo(() => {
     const types = rows
