@@ -17,12 +17,36 @@ const pct=(v:number|null|undefined)=>`${(v??0).toFixed(1)}%`;
 export function ResultsWorkspace({onSelectElection}:NavProps){
  const [rows,setRows]=useState<Election[]>([]);
  const [search,setSearch]=useState("");
- useEffect(()=>{if(!supabase)return;void supabase.from("elections").select("id,name,election_type,election_date").order("election_date",{ascending:false}).then(r=>setRows((r.data??[]) as Election[]));},[]);
- const filteredRows=useMemo(()=>{
-  const q=search.trim().toLowerCase();
-  if(!q) return rows;
-  return rows.filter((e)=>[e.name,e.election_type,typeLabel(e.election_type),e.election_date??""].join(" ").toLowerCase().includes(q));
- },[rows,search]);
+ const [loading,setLoading]=useState(true);
+ const [error,setError]=useState("");
+ useEffect(()=>{
+  if(!supabase){setLoading(false);return;}
+  let cancelled=false;
+  const q=search.trim();
+  setLoading(true);
+  setError("");
+  const timer=window.setTimeout(()=>{
+   void (async()=>{
+    try{
+     const base=supabase.from("elections").select("id,name,election_type,election_date").order("election_date",{ascending:false});
+     const response=q ? await base.ilike("name",`%${q}%`).limit(100) : await base.limit(1000);
+     if(cancelled)return;
+     if(response.error)throw response.error;
+     setRows((response.data??[]) as Election[]);
+    }catch(e){
+     if(!cancelled){
+      setRows([]);
+      setError(e instanceof Error?e.message:"Results could not be loaded.");
+     }
+    }finally{
+     if(!cancelled)setLoading(false);
+    }
+   })();
+  },250);
+  return()=>{cancelled=true;window.clearTimeout(timer);};
+ },[search]);
+ const filteredRows=rows;
+
  return <section className="space-y-5">
   <div className="rounded-2xl border border-zinc-800/60 bg-zinc-900/40 p-6">
    <div className="flex flex-col gap-4 lg:flex-row lg:items-end lg:justify-between">
