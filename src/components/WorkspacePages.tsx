@@ -16,7 +16,7 @@ const pct=(v:number|null|undefined)=>`${(v??0).toFixed(1)}%`;
 
 export function ResultsWorkspace({onSelectElection}:NavProps){
  const [rows,setRows]=useState<Election[]>([]);
- useEffect(()=>{if(!supabase)return;void supabase.from("elections").select("id,name,election_type,election_date").order("election_date",{ascending:false}).limit(100).then(r=>setRows((r.data??[]) as Election[]));},[]);
+ useEffect(()=>{if(!supabase)return;void supabase.from("elections").select("id,name,election_type,election_date").order("election_date",{ascending:false}).then(r=>setRows((r.data??[]) as Election[]));},[]);
  return <section className="space-y-5"><div className="rounded-2xl border border-zinc-800/60 bg-zinc-900/40 p-6"><p className="text-[10px] font-semibold uppercase tracking-[.18em] text-zinc-600">Results workspace</p><h2 className="mt-2 font-display text-2xl font-semibold text-zinc-100">Track results through the hierarchy</h2><p className="mt-2 max-w-2xl text-sm leading-6 text-zinc-500">Choose an election to move from the election aggregate into state, LGA, ward and polling-unit result boards.</p></div><div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">{rows.map(e=><button key={e.id} onClick={()=>onSelectElection?.(e.id)} className="rounded-2xl border border-zinc-800/60 bg-zinc-950/35 p-4 text-left hover:border-zinc-700 hover:bg-zinc-900"><span className="text-[10px] uppercase tracking-[.14em] text-zinc-600">{typeLabel(e.election_type)}</span><p className="mt-2 font-display text-sm font-semibold text-zinc-200">{e.name}</p><p className="mt-2 text-[11px] text-zinc-600">{e.election_date ?? "Date unavailable"}</p></button>)}</div></section>;
 }
 
