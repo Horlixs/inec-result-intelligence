@@ -63,8 +63,9 @@ export function ResultsWorkspace({onSelectElection}:NavProps){
    </div>
   </div>
   <div className="flex items-center justify-between gap-3 px-1">
-   <p className="text-[10px] uppercase tracking-[.16em] text-zinc-600">{search.trim()?`${filteredRows.length} matching ${filteredRows.length===1?"election":"elections"}`:`${rows.length} elections`}</p>
+   <p className="text-[10px] uppercase tracking-[.16em] text-zinc-600">{loading?"Searching…":search.trim()?`${filteredRows.length} matching ${filteredRows.length===1?"election":"elections"}`:`${rows.length} elections loaded`}</p>
   </div>
+  {error&&<div className="rounded-xl border border-amber-500/20 bg-amber-500/5 p-4 text-xs text-amber-200">{error}</div>}
   <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
    {filteredRows.map(e=><button key={e.id} onClick={()=>onSelectElection?.(e.id)} className="rounded-2xl border border-zinc-800/60 bg-zinc-950/35 p-4 text-left hover:border-zinc-700 hover:bg-zinc-900"><span className="text-[10px] uppercase tracking-[.14em] text-zinc-600">{typeLabel(e.election_type)}</span><p className="mt-2 font-display text-sm font-semibold text-zinc-200">{e.name}</p><p className="mt-2 text-[11px] text-zinc-600">{e.election_date ?? "Date unavailable"}</p></button>)}
    {!filteredRows.length&&<div className="col-span-full rounded-2xl border border-dashed border-zinc-800/60 px-5 py-10 text-center text-sm text-zinc-600">{search.trim()?`No elections match "${search.trim()}".`:"No election records are available yet."}</div>}
