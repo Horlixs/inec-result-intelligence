@@ -20,7 +20,8 @@ export function ResultsWorkspace({onSelectElection}:NavProps){
  const [loading,setLoading]=useState(true);
  const [error,setError]=useState("");
  useEffect(()=>{
-  if(!supabase){setLoading(false);return;}
+  const client=supabase;
+  if(!client){setLoading(false);return;}
   let cancelled=false;
   const q=search.trim();
   setLoading(true);
@@ -28,7 +29,7 @@ export function ResultsWorkspace({onSelectElection}:NavProps){
   const timer=window.setTimeout(()=>{
    void (async()=>{
     try{
-     const base=supabase.from("elections").select("id,name,election_type,election_date").order("election_date",{ascending:false});
+     const base=client.from("elections").select("id,name,election_type,election_date").order("election_date",{ascending:false});
      const response=q ? await base.ilike("name",`%${q}%`).limit(100) : await base.limit(1000);
      if(cancelled)return;
      if(response.error)throw response.error;
