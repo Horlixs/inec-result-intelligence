@@ -57,13 +57,23 @@ begin
   with candidate as (
     select j.id
     from public.result_processing_jobs j
+    left join public.result_sheets rs
+      on rs.id = j.result_sheet_id
+    left join public.elections e
+      on e.id = rs.election_id
     where j.status = 'queued'
       and j.engine = p_engine
       and coalesce(j.attempts, 0) < v_max_attempts
       and (j.available_at is null or j.available_at <= now())
     order by
-      j.created_at asc
-    for update skip locked
+      coalesce(e.election_date, date '1900-01-01') desc,
+      case
+        when lower(coalesce(rs.evidence_url, rs.source_url, '')) like '%inecelectionresults.net%'
+          then 1
+        else 0
+      end,
+      j.created_at desc
+    for update of j skip locked
     limit 1
   ),
   claimed as (
