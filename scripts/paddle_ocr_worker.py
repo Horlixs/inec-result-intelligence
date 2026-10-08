@@ -560,41 +560,173 @@ def process(job: dict[str, Any]) -> None:
 
 
 MAX_JOBS_PER_RUN = 3
+PROCESSING_INTERVAL_MINUTES = 10
+SCHEDULE_NAME = "paddle-ocr-processing"
+
+
+def manual_job():
+    rows = rest(
+        "result_processing_jobs",
+        params={
+            "status": "eq.processing",
+            "engine": "eq.paddle",
+            "locked_by": "like.manual-button:*",
+            "select": "id,result_sheet_id,attempts,engine,locked_at,locked_by",
+            "order": "locked_at.asc",
+            "limit": "1",
+        },
+    )
+    return rows[0] if rows else None
+
+
+def active_job_count() -> int:
+    rows = rest(
+        "result_processing_jobs",
+        params={
+            "status": "eq.processing",
+            "engine": "eq.paddle",
+            "select": "id",
+        },
+    )
+    return len(rows or [])
+
+
+def processing_due() -> bool:
+    rows = rest(
+        "pipeline_schedule",
+        params={
+            "name": f"eq.{SCHEDULE_NAME}",
+            "select": "id,next_run_at",
+            "limit": "1",
+        },
+    )
+    if not rows:
+        # Keep the worker fail-safe during the deployment window. Once the
+        # schedule row exists, automatic processing is gated by its 10-minute timer.
+        return True
+
+    value = rows[0].get("next_run_at")
+    if not value:
+        return True
+
+    try:
+        return value <= time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+    except Exception:
+        return True
+
+
+def advance_schedule() -> None:
+    rows = rest(
+        "pipeline_schedule",
+        params={"name": f"eq.{SCHEDULE_NAME}", "select": "id", "limit": "1"},
+    )
+    if not rows:
+        return
+
+    now = time.time()
+    rest(
+        f"pipeline_schedule?id=eq.{rows[0]['id']}",
+        method="PATCH",
+        payload={
+            "last_run_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(now)),
+            "next_run_at": time.strftime(
+                "%Y-%m-%dT%H:%M:%SZ",
+                time.gmtime(now + PROCESSING_INTERVAL_MINUTES * 60),
+            ),
+            "updated_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(now)),
+        },
+    )
+
+
+def run_job(job, counters):
+    try:
+        process(job)
+        finish_job(job["job_id"], int(job["attempts"]), True)
+        counters["processed"] += 1
+        print(json.dumps({
+            "ok": True,
+            "job_id": job["job_id"],
+            "result_sheet_id": job["result_sheet_id"],
+            "processed_in_run": counters["processed"],
+        }))
+    except Exception as exc:
+        message = str(exc)
+        counters["failed"] += 1
+        try:
+            rest(
+                f"result_sheets?id=eq.{job['result_sheet_id']}",
+                method="PATCH",
+                payload={
+                    "status": "pending_review",
+                    "evidence_status": "remote_only",
+                    "last_error": message[:2000],
+                },
+            )
+        finally:
+            finish_job(job["job_id"], int(job["attempts"]), False, message)
+        print(
+            json.dumps({"ok": False, "job_id": job["job_id"], "error": message}),
+            file=sys.stderr,
+        )
 
 
 def main() -> int:
-    processed = 0
-    failed = 0
+    counters = {"processed": 0, "failed": 0}
 
-    # Drain several queued jobs in one worker invocation. GitHub Actions starts
-    # this workflow every three minutes; processing only one job per invocation
-    # left a growing queue even though the worker was healthy.
+    # Manual clicks claim a real queue row immediately. The worker consumes that
+    # processing row before considering the normal 10-minute automatic timer.
+    forced = manual_job()
+    if forced:
+        run_job(forced, counters)
+        print(json.dumps({
+            "ok": counters["failed"] == 0,
+            "processed": counters["processed"],
+            "failed": counters["failed"],
+            "worker": WORKER_ID,
+            "mode": "manual",
+        }))
+        return 0 if counters["processed"] > 0 or counters["failed"] == 0 else 1
+
+    # Do not start a second OCR job while one is already processing.
+    if active_job_count() > 0:
+        print(json.dumps({"ok": True, "processed": 0, "failed": 0, "worker": WORKER_ID, "mode": "busy"}))
+        return 0
+
+    # The GitHub workflow is a wake-up mechanism; the database schedule is the
+    # actual automatic cadence. This keeps the existing worker alive without
+    # changing it into a three-minute processing timer.
+    if not processing_due():
+        print(json.dumps({"ok": True, "processed": 0, "failed": 0, "worker": WORKER_ID, "mode": "not_due"}))
+        return 0
+
     for _ in range(MAX_JOBS_PER_RUN):
-        job_rows = rpc("claim_result_processing_job", {"p_worker_id": WORKER_ID, "p_max_attempts": MAX_ATTEMPTS, "p_engine": "paddle"})
+        job_rows = rpc(
+            "claim_result_processing_job",
+            {
+                "p_worker_id": WORKER_ID,
+                "p_max_attempts": MAX_ATTEMPTS,
+                "p_engine": "paddle",
+            },
+        )
         if not job_rows:
-            if processed == 0 and failed == 0:
-                print("No PaddleOCR job available")
             break
+        run_job(job_rows[0], counters)
 
-        job = job_rows[0]
-        try:
-            process(job)
-            finish_job(job["job_id"], int(job["attempts"]), True)
-            processed += 1
-            print(json.dumps({"ok": True, "job_id": job["job_id"], "result_sheet_id": job["result_sheet_id"], "processed_in_run": processed}))
-        except Exception as exc:
-            message = str(exc)
-            failed += 1
-            try:
-                rest(f"result_sheets?id=eq.{job['result_sheet_id']}", method="PATCH", payload={"status": "pending_review", "evidence_status": "remote_only", "last_error": message[:2000]})
-            finally:
-                finish_job(job["job_id"], int(job["attempts"]), False, message)
-            print(json.dumps({"ok": False, "job_id": job["job_id"], "error": message}), file=sys.stderr)
-            # Do not stop the drain because one bad sheet should not block the queue.
-            continue
+    # A manual click already advanced the timer from its click time. For an
+    # automatic run, advance it here from the actual automatic wake-up.
+    advance_schedule()
 
-    print(json.dumps({"ok": failed == 0, "processed": processed, "failed": failed, "worker": WORKER_ID}))
-    return 0 if processed > 0 or failed == 0 else 1
+    if counters["processed"] == 0 and counters["failed"] == 0:
+        print("No PaddleOCR job available")
+
+    print(json.dumps({
+        "ok": counters["failed"] == 0,
+        "processed": counters["processed"],
+        "failed": counters["failed"],
+        "worker": WORKER_ID,
+        "mode": "automatic",
+    }))
+    return 0 if counters["processed"] > 0 or counters["failed"] == 0 else 1
 
 
 if __name__ == "__main__":
