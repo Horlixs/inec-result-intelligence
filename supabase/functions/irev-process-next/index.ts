@@ -76,7 +76,7 @@ async function run() {
     .from("pipeline_schedule")
     .update({
       last_run_at: requestedAt,
-      next_run_at: new Date(Date.now() + 10 * 60_000).toISOString(),
+      next_run_at: new Date(Date.now() + 15 * 60_000).toISOString(),
       updated_at: requestedAt,
     })
     .eq("name", "paddle-ocr-processing");
