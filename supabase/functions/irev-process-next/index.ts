@@ -19,11 +19,13 @@ function json(data: unknown, status = 200) {
 async function run() {
   const requestedAt = new Date().toISOString();
 
+  const activeCutoff = new Date(Date.now() - 15 * 60_000).toISOString();
   const { count: activeCount, error: activeError } = await supabase
     .from("result_processing_jobs")
     .select("id", { count: "exact", head: true })
     .eq("status", "processing")
-    .eq("engine", "paddle");
+    .eq("engine", "paddle")
+    .gte("locked_at", activeCutoff);
 
   if (activeError) throw activeError;
 
