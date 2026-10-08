@@ -17,17 +17,32 @@ function json(data: unknown, status = 200) {
 }
 
 async function run() {
-  const { data, error } = await supabase
+  const requestedAt = new Date().toISOString();
+
+  const { count: activeCount, error: activeError } = await supabase
     .from("result_processing_jobs")
-    .select("id")
-    .eq("status", "queued")
-    .eq("engine", "paddle")
-    .order("available_at", { ascending: true })
-    .limit(1);
+    .select("id", { count: "exact", head: true })
+    .eq("status", "processing")
+    .eq("engine", "paddle");
+
+  if (activeError) throw activeError;
+
+  if ((activeCount ?? 0) > 0) {
+    return {
+      ok: true,
+      status: "busy",
+      message: "A PaddleOCR result is already processing. No second job was started.",
+      active_jobs: activeCount ?? 0,
+    };
+  }
+
+  const { data, error } = await supabase.rpc("claim_result_processing_job", {
+    p_worker_id: `manual-button:${crypto.randomUUID()}`,
+    p_max_attempts: 3,
+    p_engine: "paddle",
+  });
 
   if (error) throw error;
-
-  const requestedAt = new Date().toISOString();
 
   if (!data?.length) {
     return {
@@ -37,7 +52,9 @@ async function run() {
     };
   }
 
-  const jobId = data[0].id;
+  const job = data[0];
+  const jobId = job.job_id;
+
   const { data: runRow, error: runError } = await supabase
     .from("pipeline_runs")
     .insert({
@@ -47,6 +64,7 @@ async function run() {
       metadata: {
         run_type: "processing",
         requested_job_id: jobId,
+        trigger_mode: "manual_claim",
       },
     })
     .select("id")
@@ -54,24 +72,21 @@ async function run() {
 
   if (runError) throw runError;
 
-  const { error: releaseError } = await supabase
-    .from("result_processing_jobs")
+  const { error: scheduleError } = await supabase
+    .from("pipeline_schedule")
     .update({
-      available_at: requestedAt,
-      locked_at: null,
-      locked_by: null,
+      last_run_at: requestedAt,
+      next_run_at: new Date(Date.now() + 10 * 60_000).toISOString(),
       updated_at: requestedAt,
     })
-    .eq("id", jobId)
-    .eq("status", "queued")
-    .eq("engine", "paddle");
+    .eq("name", "paddle-ocr-processing");
 
-  if (releaseError) throw releaseError;
+  if (scheduleError) throw scheduleError;
 
   return {
     ok: true,
-    status: "scheduled",
-    message: "Processing requested. The queued PaddleOCR job has been released for the existing worker to claim.",
+    status: "processing",
+    message: "A queued PaddleOCR job was claimed for processing. The existing PaddleOCR worker will complete the claimed job.",
     result_processing_job_id: jobId,
     requested_at: requestedAt,
     pipeline_run_id: runRow.id,
