@@ -570,7 +570,7 @@ def manual_job():
         params={
             "status": "eq.processing",
             "engine": "eq.paddle",
-            "locked_by": "like.manual-button:*",
+            "locked_by": "like.manual-button:%",
             "select": "id,result_sheet_id,attempts,engine,locked_at,locked_by",
             "order": "locked_at.asc",
             "limit": "1",
