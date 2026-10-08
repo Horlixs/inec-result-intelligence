@@ -564,6 +564,13 @@ PROCESSING_INTERVAL_MINUTES = 10
 SCHEDULE_NAME = "paddle-ocr-processing"
 
 
+def stale_cutoff_iso() -> str:
+    return time.strftime(
+        "%Y-%m-%dT%H:%M:%SZ",
+        time.gmtime(time.time() - 15 * 60),
+    )
+
+
 def manual_job():
     rows = rest(
         "result_processing_jobs",
@@ -571,6 +578,7 @@ def manual_job():
             "status": "eq.processing",
             "engine": "eq.paddle",
             "locked_by": "like.manual-button:%",
+            "locked_at": f"gte.{stale_cutoff_iso()}",
             "select": "id,result_sheet_id,attempts,engine,locked_at,locked_by",
             "order": "locked_at.asc",
             "limit": "1",
@@ -585,6 +593,7 @@ def active_job_count() -> int:
         params={
             "status": "eq.processing",
             "engine": "eq.paddle",
+            "locked_at": f"gte.{stale_cutoff_iso()}",
             "select": "id",
         },
     )
