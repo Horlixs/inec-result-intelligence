@@ -560,7 +560,7 @@ def process(job: dict[str, Any]) -> None:
 
 
 MAX_JOBS_PER_RUN = 3
-PROCESSING_INTERVAL_MINUTES = 10
+PROCESSING_INTERVAL_MINUTES = 15
 SCHEDULE_NAME = "paddle-ocr-processing"
 
 
@@ -611,7 +611,7 @@ def processing_due() -> bool:
     )
     if not rows:
         # Keep the worker fail-safe during the deployment window. Once the
-        # schedule row exists, automatic processing is gated by its 10-minute timer.
+        # schedule row exists, automatic processing is gated by its 15-minute timer.
         return True
 
     value = rows[0].get("next_run_at")
@@ -683,7 +683,7 @@ def main() -> int:
     counters = {"processed": 0, "failed": 0}
 
     # Manual clicks claim a real queue row immediately. The worker consumes that
-    # processing row before considering the normal 10-minute automatic timer.
+    # processing row before considering the normal 15-minute automatic timer.
     forced = manual_job()
     if forced:
         run_job(forced, counters)
