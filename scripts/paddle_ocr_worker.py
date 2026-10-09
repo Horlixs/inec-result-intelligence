@@ -418,27 +418,35 @@ def structure_with_gemini(lines: list[dict[str, Any]], image_paths: list[Path]) 
         for line in ordered_lines
     )
     prompt = """You are structuring OCR output from an INEC Nigerian polling-unit result sheet.\nReturn ONLY JSON matching this schema:\n{\"pollingUnitName\":string|null,\"pollingUnitCode\":string|null,\"registeredVoters\":number|null,\"accreditedVoters\":number|null,\"rejectedVotes\":number|null,\"candidates\":[{\"label\":string,\"votes\":number|null}],\"confidence\":number}\nRules: never invent missing values; preserve uncertain handwritten candidate labels literally; do not silently correct OCR text; use null when a value cannot be established; votes must be integers or null; confidence is your confidence in the structured extraction, not OCR confidence. Candidate rows should include every candidate/result label that can be identified."""
-    parts = [{"text": prompt + "\n\nOCR output:\n" + ocr_text}]
+    text_part = {"text": prompt + "\n\nOCR output:\n" + ocr_text}
+    image_parts = []
     for image_path in image_paths:
         image_bytes = image_path.read_bytes()
-        parts.append({
+        image_parts.append({
             "inlineData": {
                 "mimeType": "image/png",
                 "data": base64.b64encode(image_bytes).decode("ascii"),
             }
         })
-    body = {
-        "contents": [{"parts": parts}],
-        "generationConfig": {"temperature": 0, "responseMimeType": "application/json", "maxOutputTokens": 2048},
-    }
     last_error = None
     for attempt in range(1, 5):
+        # The full-page images are useful for the first visual cross-check, but
+        # large scanned IReV PDFs can make Gemini's multimodal request expire.
+        # On retries, send the structured PaddleOCR text only so transient model
+        # overload or image payload size does not fail the whole processing job.
+        parts = [text_part] + (image_parts if attempt == 1 else [])
+        if attempt == 2 and image_parts:
+            print(json.dumps({"gemini_fallback": "ocr_text_only", "reason": "retrying without large page images"}))
+        body = {
+            "contents": [{"parts": parts}],
+            "generationConfig": {"temperature": 0, "responseMimeType": "application/json", "maxOutputTokens": 2048},
+        }
         try:
             response = requests.post(
                 "https://generativelanguage.googleapis.com/v1beta/models/gemini-3.5-flash-lite:generateContent",
                 headers={"Content-Type": "application/json", "x-goog-api-key": GEMINI_KEY},
                 json=body,
-                timeout=60,
+                timeout=90,
             )
             if response.ok:
                 text = response.json().get("candidates", [{}])[0].get("content", {}).get("parts", [{}])[0].get("text")
