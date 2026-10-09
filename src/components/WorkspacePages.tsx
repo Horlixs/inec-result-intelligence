@@ -130,7 +130,6 @@ export function AnalyticsWorkspace(){
  const queueCount=live?.queued_jobs??metrics?.queued_jobs??pipeline?.queue_remaining??0;
  const activeCount=live?.active_jobs??metrics?.active_jobs??pipeline?.active_jobs??0;
  const staleCount=live?.stale_processing_jobs??0;
- const heartbeatFresh=Boolean(pipeline?.status==="running"&&pipeline?.heartbeat_at&&Date.now()-new Date(pipeline.heartbeat_at).getTime()<15*60*1000);
  const pipelineState=live
   ? staleCount>0?"error":activeCount>0?"active":queueCount>0?"queued":"idle"
   : pipeline?.status==="error"?"error":activeCount>0?"active":queueCount>0?"queued":"idle";
