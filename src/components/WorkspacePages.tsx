@@ -111,7 +111,11 @@ export function AnalyticsWorkspace(){
    setRows((r.data??[]) as Coverage[]);
    setPipeline((p.data??null) as PipelineStatus|null);
    setMetrics((m.data??null) as PipelineMetrics|null);
-   setLive((l.data??null) as LiveProcessingStatus|null);
+   // PostgREST returns SETOF/table RPC results as an array. Normalize the row
+   // before storing it; treating the array itself as an object silently made
+   // all live queue counters undefined while timestamps continued updating.
+   const liveRow = Array.isArray(l.data) ? l.data[0] : l.data;
+   setLive((liveRow??null) as LiveProcessingStatus|null);
    setLoading(false);
   };
   void load();
