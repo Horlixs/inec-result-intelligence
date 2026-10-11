@@ -757,7 +757,9 @@ def queue_snapshot(stage: str) -> None:
                 return "source_document_collision"
             if "no readable text" in low or "no readable text" in low:
                 return "ocr_no_readable_text"
-            return re.sub(r"\\s+", " ", raw)[:140]
+            safe = re.sub(r"https?://\\S+", "[url]", raw)
+            safe = re.sub(r"\\b[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\\b", "[id]", safe, flags=re.I)
+            return re.sub(r"\\s+", " ", safe)[:140]
 
         processing_summary = []
         for row in processing:
