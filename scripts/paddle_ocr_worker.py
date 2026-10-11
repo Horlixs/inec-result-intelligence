@@ -688,7 +688,112 @@ def run_job(job, counters):
         )
 
 
+def queue_snapshot(stage: str) -> None:
+    """Emit a sanitized view of the live queue so 'busy' and action-required states
+    can be traced to actual database rows from the GitHub Actions log."""
+    try:
+        now = time.time()
+        today = time.strftime("%Y-%m-%dT00:00:00Z", time.gmtime())
+        processing = rest(
+            "result_processing_jobs",
+            params={
+                "engine": "eq.paddle",
+                "status": "eq.processing",
+                "select": "attempts,locked_at,locked_by,last_error,updated_at",
+                "order": "locked_at.asc",
+                "limit": "10",
+            },
+        ) or []
+        failed = rest(
+            "result_processing_jobs",
+            params={
+                "engine": "eq.paddle",
+                "status": "eq.failed",
+                "updated_at": f"gte.{today}",
+                "select": "attempts,last_error,updated_at",
+                "order": "updated_at.desc",
+                "limit": "10",
+            },
+        ) or []
+        completed = rest(
+            "result_processing_jobs",
+            params={
+                "engine": "eq.paddle",
+                "status": "eq.completed",
+                "completed_at": f"gte.{today}",
+                "select": "completed_at",
+                "order": "completed_at.desc",
+                "limit": "10",
+            },
+        ) or []
+        queued = rest(
+            "result_processing_jobs",
+            params={
+                "engine": "eq.paddle",
+                "status": "eq.queued",
+                "select": "id",
+                "limit": "1000",
+            },
+        ) or []
+
+        def error_category(value):
+            raw = str(value or "").strip()
+            if not raw:
+                return None
+            low = raw.lower()
+            if "maximum processing attempts reached after a stale worker lock" in low:
+                return "stale_worker_lock_retry_exhausted"
+            if "maximum processing attempts reached" in low:
+                return "retry_limit_reached"
+            if "gemini http 503" in low or "deadline expired before operation could complete" in low:
+                return "gemini_unavailable"
+            if "gemini http 429" in low or "resource_exhausted" in low:
+                return "gemini_rate_limited"
+            if "http 504" in low or "gateway timeout" in low:
+                return "source_gateway_timeout"
+            if "google_generative_ai_api_key is required" in low:
+                return "gemini_key_missing"
+            if "irev document collision" in low:
+                return "source_document_collision"
+            if "no readable text" in low or "no readable text" in low:
+                return "ocr_no_readable_text"
+            return re.sub(r"\\s+", " ", raw)[:140]
+
+        processing_summary = []
+        for row in processing:
+            locked_at = row.get("locked_at")
+            try:
+                age_minutes = round((now - time.mktime(time.strptime(locked_at[:19], "%Y-%m-%dT%H:%M:%S"))) / 60, 1) if locked_at else None
+            except (ValueError, TypeError):
+                age_minutes = None
+            worker = str(row.get("locked_by") or "")
+            processing_summary.append({
+                "age_minutes": age_minutes,
+                "attempts": row.get("attempts"),
+                "owner": "manual-button" if worker.startswith("manual-button:") else ("paddle-worker" if worker.startswith("paddle-ocr:") else ("other" if worker else "none")),
+                "error": error_category(row.get("last_error")),
+            })
+
+        print(json.dumps({
+            "queue_snapshot": stage,
+            "queued_sample_count_max_1000": len(queued),
+            "processing_jobs": processing_summary,
+            "failed_today_sample": [{
+                "attempts": row.get("attempts"),
+                "updated_at": row.get("updated_at"),
+                "error": error_category(row.get("last_error")),
+            } for row in failed],
+            "completed_today_sample_count_max_10": len(completed),
+        }))
+    except Exception as exc:
+        print(json.dumps({
+            "queue_snapshot": stage,
+            "diagnostic_error": str(exc)[:180],
+        }))
+
+
 def main() -> int:
+    queue_snapshot("before")
     counters = {"processed": 0, "failed": 0}
 
     # Manual clicks claim a real queue row immediately. The worker consumes that
