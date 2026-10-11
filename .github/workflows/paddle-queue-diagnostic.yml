@@ -146,8 +146,10 @@ jobs:
                   "updated_at": item.get("updated_at"),
               })
 
+          frontend_supabase_url = "https://rmcyccjnjxqcnqyvxnle.supabase.co"
           report = {
               "checked_at_utc": now.isoformat(),
+              "frontend_database_matches_worker": os.environ["SUPABASE_URL"].rstrip("/") == frontend_supabase_url,
               "counts": {
                   "queued": count_status("queued"),
                   "processing_total": count_status("processing"),
