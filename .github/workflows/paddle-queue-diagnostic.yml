@@ -128,7 +128,7 @@ jobs:
               "select": "attempts,last_error,updated_at",
               "engine": "eq.paddle", "status": "eq.failed",
               "updated_at": "gte." + today,
-              "order": "updated_at.desc", "limit": "10",
+              "order": "discovered_at.desc", "limit": "10",
           }, "0-9")
           completed, _ = query({
               "select": "completed_at",
@@ -145,15 +145,15 @@ jobs:
               return total
 
           failed_sheets, _ = query({
-              "select": "status,last_error,updated_at,processed_at",
+              "select": "status,last_error,discovered_at,processed_at",
               "status": "eq.failed",
-              "order": "updated_at.desc",
+              "order": "discovered_at.desc",
               "limit": "10",
           }, "0-9", table_url=sheets_base)
           review_sheets, _ = query({
-              "select": "status,last_error,updated_at,processed_at",
+              "select": "status,last_error,discovered_at,processed_at",
               "status": "eq.pending_review",
-              "order": "updated_at.desc",
+              "order": "discovered_at.desc",
               "limit": "10",
           }, "0-9", table_url=sheets_base)
 
@@ -197,12 +197,12 @@ jobs:
                   "error": classify(item.get("last_error")),
               } for item in failed],
               "failed_result_sheets_sample": [{
-                  "updated_at": item.get("updated_at"),
+                  "discovered_at": item.get("discovered_at"),
                   "processed_at": item.get("processed_at"),
                   "error": classify(item.get("last_error")),
               } for item in failed_sheets],
               "pending_review_result_sheets_sample": [{
-                  "updated_at": item.get("updated_at"),
+                  "discovered_at": item.get("discovered_at"),
                   "processed_at": item.get("processed_at"),
                   "error": classify(item.get("last_error")),
               } for item in review_sheets],
