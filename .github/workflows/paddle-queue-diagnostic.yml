@@ -173,8 +173,21 @@ jobs:
               })
 
           frontend_supabase_url = "https://rmcyccjnjxqcnqyvxnle.supabase.co"
+          rpc_request = urllib.request.Request(
+              os.environ["SUPABASE_URL"].rstrip("/") + "/rest/v1/rpc/get_paddle_processing_status",
+              data=b"{}",
+              headers={
+                  "apikey": key,
+                  "Authorization": "Bearer " + key,
+                  "Content-Type": "application/json",
+              },
+              method="POST",
+          )
+          with urllib.request.urlopen(rpc_request, timeout=20) as response:
+              live_status_rpc = json.loads(response.read().decode("utf-8") or "null")
           report = {
               "checked_at_utc": now.isoformat(),
+              "live_status_rpc": live_status_rpc,
               "frontend_database_matches_worker": os.environ["SUPABASE_URL"].rstrip("/") == frontend_supabase_url,
               "counts": {
                   "queued": count_status("queued"),
