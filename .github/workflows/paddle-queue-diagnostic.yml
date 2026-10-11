@@ -64,15 +64,19 @@ jobs:
                   h["Range"] = range_header
               url = (table_url or base) + "?" + urllib.parse.urlencode(params, safe=",:.*()")
               req = urllib.request.Request(url, headers=h, method="GET")
-              with urllib.request.urlopen(req, timeout=20) as response:
-                  body = response.read().decode("utf-8")
-                  total = None
-                  content_range = response.headers.get("Content-Range", "")
-                  if "/" in content_range:
-                      tail = content_range.rsplit("/", 1)[1]
-                      if tail.isdigit():
-                          total = int(tail)
-                  return json.loads(body or "[]"), total
+              try:
+                  with urllib.request.urlopen(req, timeout=20) as response:
+                      body = response.read().decode("utf-8")
+                      total = None
+                      content_range = response.headers.get("Content-Range", "")
+                      if "/" in content_range:
+                          tail = content_range.rsplit("/", 1)[1]
+                          if tail.isdigit():
+                              total = int(tail)
+                      return json.loads(body or "[]"), total
+              except urllib.error.HTTPError as exc:
+                  detail = exc.read().decode("utf-8", "replace")[:600]
+                  raise RuntimeError(f"Supabase REST query failed for table={urllib.parse.urlparse(url).path.rsplit('/', 1)[-1]} status={exc.code} body={detail}") from exc
 
           def count_status(status, extra=None):
               params = {"select": "id", "engine": "eq.paddle", "status": "eq." + status}
