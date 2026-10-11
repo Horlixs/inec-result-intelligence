@@ -3,7 +3,7 @@ name: IReV OCR Drain
 on:
   schedule:
     # Primary GitHub backup. Supabase Cron is the primary scheduler.
-    - cron: "*/3 * * * *"
+    - cron: "*/5 * * * *"
   workflow_run:
     workflows: ["IReV Refresh"]
     types: [completed]
