@@ -128,7 +128,7 @@ jobs:
               "select": "attempts,last_error,updated_at",
               "engine": "eq.paddle", "status": "eq.failed",
               "updated_at": "gte." + today,
-              "order": "discovered_at.desc", "limit": "10",
+              "order": "updated_at.desc", "limit": "10",
           }, "0-9")
           completed, _ = query({
               "select": "completed_at",
