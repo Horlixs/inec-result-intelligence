@@ -43,7 +43,9 @@ jobs:
           import json, os, re, urllib.error, urllib.parse, urllib.request
           from datetime import datetime, timezone
 
-          base = os.environ["SUPABASE_URL"].rstrip("/") + "/rest/v1/result_processing_jobs"
+          api_base = os.environ["SUPABASE_URL"].rstrip("/") + "/rest/v1/"
+          base = api_base + "result_processing_jobs"
+          sheets_base = api_base + "result_sheets"
           key = os.environ["SUPABASE_SERVICE_ROLE_KEY"]
           now = datetime.now(timezone.utc)
           today = now.replace(hour=0, minute=0, second=0, microsecond=0).isoformat().replace("+00:00", "Z")
@@ -56,11 +58,11 @@ jobs:
               "Range": "0-0",
           }
 
-          def query(params, range_header=None):
+          def query(params, range_header=None, table_url=None):
               h = dict(headers)
               if range_header:
                   h["Range"] = range_header
-              url = base + "?" + urllib.parse.urlencode(params, safe=",:.*()")
+              url = (table_url or base) + "?" + urllib.parse.urlencode(params, safe=",:.*()")
               req = urllib.request.Request(url, headers=h, method="GET")
               with urllib.request.urlopen(req, timeout=20) as response:
                   body = response.read().decode("utf-8")
@@ -131,6 +133,26 @@ jobs:
               "order": "completed_at.desc", "limit": "10",
           }, "0-9")
 
+          def count_sheet_status(status):
+              _, total = query(
+                  {"select": "id", "status": "eq." + status},
+                  table_url=sheets_base,
+              )
+              return total
+
+          failed_sheets, _ = query({
+              "select": "status,last_error,updated_at,processed_at",
+              "status": "eq.failed",
+              "order": "updated_at.desc",
+              "limit": "10",
+          }, "0-9", table_url=sheets_base)
+          review_sheets, _ = query({
+              "select": "status,last_error,updated_at,processed_at",
+              "status": "eq.pending_review",
+              "order": "updated_at.desc",
+              "limit": "10",
+          }, "0-9", table_url=sheets_base)
+
           rows = []
           stale = 0
           for item in processing:
@@ -157,12 +179,29 @@ jobs:
                   "completed_today_utc": count_status("completed", {"completed_at": "gte." + today}),
                   "failed_today_utc": count_status("failed", {"updated_at": "gte." + today}),
               },
+              "result_sheet_counts": {
+                  "failed_total": count_sheet_status("failed"),
+                  "pending_review_total": count_sheet_status("pending_review"),
+                  "processing_total": count_sheet_status("processing"),
+                  "discovered_total": count_sheet_status("discovered"),
+                  "verified_total": count_sheet_status("verified"),
+              },
               "processing_jobs_sample": rows,
               "failed_today_sample": [{
                   "attempts": item.get("attempts"),
                   "updated_at": item.get("updated_at"),
                   "error": classify(item.get("last_error")),
               } for item in failed],
+              "failed_result_sheets_sample": [{
+                  "updated_at": item.get("updated_at"),
+                  "processed_at": item.get("processed_at"),
+                  "error": classify(item.get("last_error")),
+              } for item in failed_sheets],
+              "pending_review_result_sheets_sample": [{
+                  "updated_at": item.get("updated_at"),
+                  "processed_at": item.get("processed_at"),
+                  "error": classify(item.get("last_error")),
+              } for item in review_sheets],
               "completed_today_sample_count_max_10": len(completed),
           }
           print(json.dumps(report, ensure_ascii=False))
