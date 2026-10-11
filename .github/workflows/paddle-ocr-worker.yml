@@ -69,5 +69,14 @@ jobs:
           python -m pip install paddlepaddle==3.2.0 -i https://www.paddlepaddle.org.cn/packages/stable/cpu/
           python -m pip install -r requirements-paddleocr.txt
 
+      - name: Cache PaddleX inference models
+        uses: actions/cache@v4
+        with:
+          path: ~/.paddlex/official_models
+          key: paddlex-${{ runner.os }}-pp-ocrv5-mobile-en-${{ hashFiles('requirements-paddleocr.txt') }}
+          restore-keys: |
+            paddlex-${{ runner.os }}-pp-ocrv5-mobile-en-
+          save-always: true
+
       - name: Process queued result sheets
         run: python scripts/paddle_ocr_worker_runner.py
